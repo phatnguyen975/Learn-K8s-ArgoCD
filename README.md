@@ -21,6 +21,8 @@
    6.5. [Namespace](#namespace)
 7. [Configuration Management: ConfigMaps and Secrets](#7-configuration-management-configmaps-and-secrets)
 8. [Storage: Persistent Volumes (PV) & Persistent Volume Claims (PVC)](#8-storage-persistent-volumes-pv--persistent-volume-claims-pvc)
+9. [Ingress: The Smart Router (Layer 7 Load Balancing)](#9-ingress-the-smart-router-layer-7-load-balancing)
+10. [Helm (The Package Manager)](#10-helm-the-package-manager)
 
 ## 1. Introduction to Kubernetes
 
@@ -451,143 +453,6 @@ spec:
       targetPort: 8080 # The port the actual Container is listening on
       # nodePort: 30005 # Only used if type is NodePort (Exposes port on host machine)
 ```
-
-### The Ingress `spec` (Layer 7 Routing)
-
-While a `Service` (like `NodePort` or `LoadBalancer`) exposes an application at the network level (Layer 4 - IP and Port), an **Ingress** operates at the application layer (Layer 7 - HTTP/HTTPS). It acts as a smart router or reverse proxy, allowing you to route external traffic to different Services based on the requested URL domain (host) or the URL path.
-
-**Crucial Note:** An Ingress resource is just a set of routing rules. It does **absolutely nothing** unless you have an **Ingress Controller** (like NGINX, Traefik, or HAProxy) running in your cluster to actually read these rules and process the traffic.
-
-1. **Path-Based Routing (Simple Fanout)**
-
-**Concept:** Path-based routing (also known as a simple fanout) allows you to route traffic from a single IP address and a single domain name to multiple backend Services based on the HTTP URI (the path after the domain).
-
-**Use case:** You have one domain `example.com`. You want `example.com/api` to hit your backend Java Spring Boot service, and `example.com/web` to hit your frontend React service.
-
-**YAML Specification (`path-based-ingress.yaml`):**
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: path-based-ingress
-  annotations:
-    # Often needed if your backend doesn't expect the /api prefix
-    nginx.ingress.kubernetes.io/rewrite-target: /
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: myapp.example.com # The single domain name
-      http:
-        paths:
-          # Rule 1: Traffic to /api goes to the backend service
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-api-service
-                port:
-                  number: 8080
-
-          # Rule 2: Traffic to /web goes to the frontend service
-          - path: /web
-            pathType: Prefix
-            backend:
-              service:
-                name: frontend-web-service
-                port:
-                  number: 80
-```
-
-- **Explanation:** The Ingress controller evaluates the paths in order. Because `pathType` is set to `Prefix`, a request to `myapp.example.com/api/v1/users` will match the `/api` rule and be forwarded to the `backend-api-service` on port `8080`.
-
-2. **Host-Based Routing (Name-Based Virtual Hosting)**
-
-**Concept:** Host-based routing supports routing HTTP traffic to multiple hostnames (domains or subdomains) using the same Ingress IP address. The Ingress controller inspects the HTTP `Host` header of the incoming request to determine which backend Service should receive it.
-
-**Use case:** You have two completely separate applications sharing the same cluster. `api.example.com` needs to go to Service A, and `admin.example.com` needs to go to Service B.
-
-**YAML Specification (`host-based-ingress.yaml`):**
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: host-based-ingress
-spec:
-  ingressClassName: nginx
-  rules:
-    # Host 1: API Subdomain
-    - host: api.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: api-service
-                port:
-                  number: 8080
-
-    # Host 2: Admin Subdomain
-    - host: admin.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: admin-service
-                port:
-                  number: 80
-```
-
-- **Explanation:** In this `spec`, there are two separate items in the `rules` array, each defining a different `host`. If a user types `api.example.com` into their browser, the DNS resolves to the Ingress controller's IP. The controller sees the `Host: api.example.com` header and routes the traffic exclusively to the `api-service`.
-
-3. **TLS (HTTPS Setup)**
-
-**Concept:** By default, Ingress traffic is unencrypted (HTTP). You can secure an Ingress by specifying a `tls` section containing a Secret that holds a TLS private key and certificate. This enables "TLS Termination" at the Ingress controller - meaning the external connection is encrypted (HTTPS), but the internal traffic between the controller and your Pods is usually plain HTTP, saving processing power on your application containers.
-
-**Prerequisite:** Before applying the Ingress, you must create a Kubernetes Secret of type `tls`.
-
-```bash
-# Command to create a TLS secret from your certificate files
-kubectl create secret tls myapp-tls-secret --cert=path/to/tls.crt --key=path/to/tls.key
-```
-
-**YAML Specification (`tls-ingress.yaml`):**
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: tls-secured-ingress
-spec:
-  ingressClassName: nginx
-
-  # [NEW] TLS Configuration Block
-  tls:
-    - hosts:
-        - secure.example.com # The domain this certificate applies to
-      secretName: myapp-tls-secret # The K8s Secret containing the .crt and .key
-
-  # Standard Routing Rules
-  rules:
-    - host: secure.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: secure-app-service
-                port:
-                  number: 80
-```
-
-- **Explanation:** The `tls` array specifies which `hosts` should be secured using which `secretName`.
-  - When the Ingress controller reads this, it automatically configures itself to listen on port 443 (HTTPS) for `secure.example.com` and uses the provided certificate to encrypt the connection.
-  - **Note:** You can combine all three of these! You can have an Ingress that uses TLS, has multiple Hosts, and uses Path-based routing under each Host.
 
 ## 6. Core Components
 
@@ -1211,43 +1076,171 @@ spec:
 | `kubectl describe pvc <name>`  | Shows detailed information about the PVC. Extremely useful when a PVC is stuck in `Pending` (often due to insufficient space or mismatched access modes). | `kubectl describe pvc mysql-database-pvc` |
 |  `kubectl delete pvc <name>`   |            Deletes the storage claim. Whether the underlying data is deleted or retained depends on the PV’s `persistentVolumeReclaimPolicy`.             |  `kubectl delete pvc mysql-database-pvc`  |
 
-## 8. Advanced Concepts
+## 9. Ingress: The Smart Router (Layer 7 Load Balancing)
 
-### Ingress
+### What is an Ingress?
 
-**Definition:** An API object that manages external access to the services in a cluster, typically HTTP/HTTPS. It acts as a smart router/reverse proxy (like Nginx) sitting in front of your Services.
+Up to this point, we used a `Service` (like `NodePort` or `LoadBalancer`) to expose applications to the outside world. However, Services operate at Layer 4 (Transport Layer - TCP/UDP). They only understand IP addresses and Ports.
 
-**Why use it?** Instead of using 10 LoadBalancers for 10 Services (expensive), you use 1 Ingress Controller to route traffic based on domains (e.g., `api.example.com` -> Service A, `web.example.com` -> Service B).
+An **Ingress** operates at Layer 7 (Application Layer - HTTP/HTTPS). It is an API object that acts as a smart router or reverse proxy for your cluster. Instead of creating a separate, expensive Cloud Load Balancer for every single Service you deploy, you can use one Ingress to route traffic to dozens of different backend Services based on the URL path or the domain name requested by the user.
 
-**Setup (Minikube):**
+**Why use it?**
 
-```bash
-# Enable NGINX Ingress controller in Minikube
-minikube addons enable ingress
-```
+Instead of using 10 LoadBalancers for 10 Services (expensive), you use 1 Ingress Controller to route traffic based on domains (e.g., `api.example.com` -> Service A, `web.example.com` -> Service B).
 
-**YAML Structure (`ingress.yaml`):**
+### The Ingress Controller
+
+**Crucial Note:** Creating an Ingress YAML file only defines the routing rules. It does **absolutely nothing** on its own.
+
+To make the rules work, you must have an **Ingress Controller** running in your cluster. The controller is an application (usually a Pod itself) that reads the Ingress rules and implements them.
+
+- **Popular Controllers:** NGINX Ingress Controller (the most common), Traefik, HAProxy, or cloud-native ones like AWS ALB Ingress Controller.
+- **In Minikube:** You enable it simply by running: `minikube addons enable ingress`.
+
+### Key Capabilities of Ingress
+
+1. **Path-Based Routing (Simple Fanout)**
+
+**Concept:** Path-based routing (also known as a simple fanout) allows you to route traffic from a single IP address and a single domain name to multiple backend Services based on the HTTP URI (the path after the domain).
+
+**Use case:** You have one domain `example.com`. You want `example.com/api` to hit your backend Java Spring Boot service, and `example.com/web` to hit your frontend React service.
+
+**YAML Specification (`path-based-ingress.yaml`):**
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: example-ingress
+  name: path-based-ingress
+  annotations:
+    # Often needed if your backend doesn't expect the /api prefix
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  ingressClassName: nginx
   rules:
-    - host: myapp.local
+    - host: myapp.example.com # The single domain name
+      http:
+        paths:
+          # Rule 1: Traffic to /api goes to the backend service
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-api-service
+                port:
+                  number: 8080
+
+          # Rule 2: Traffic to /web goes to the frontend service
+          - path: /web
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-web-service
+                port:
+                  number: 80
+```
+
+- **Explanation:** The Ingress controller evaluates the paths in order. Because `pathType` is set to `Prefix`, a request to `myapp.example.com/api/v1/users` will match the `/api` rule and be forwarded to the `backend-api-service` on port `8080`.
+
+2. **Host-Based Routing (Name-Based Virtual Hosting)**
+
+**Concept:** Host-based routing supports routing HTTP traffic to multiple hostnames (domains or subdomains) using the same Ingress IP address. The Ingress controller inspects the HTTP `Host` header of the incoming request to determine which backend Service should receive it.
+
+**Use case:** You have two completely separate applications sharing the same cluster. `api.example.com` needs to go to Service A, and `admin.example.com` needs to go to Service B.
+
+**YAML Specification (`host-based-ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: host-based-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    # Host 1: API Subdomain
+    - host: api.example.com
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: my-service
+                name: api-service
+                port:
+                  number: 8080
+
+    # Host 2: Admin Subdomain
+    - host: admin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-service
                 port:
                   number: 80
 ```
 
-### Helm (The Package Manager)
+- **Explanation:** In this `spec`, there are two separate items in the `rules` array, each defining a different `host`. If a user types `api.example.com` into their browser, the DNS resolves to the Ingress controller's IP. The controller sees the `Host: api.example.com` header and routes the traffic exclusively to the `api-service`.
+
+3. **TLS (HTTPS Setup)**
+
+**Concept:** By default, Ingress traffic is unencrypted (HTTP). You can secure an Ingress by specifying a `tls` section containing a Secret that holds a TLS private key and certificate. This enables "TLS Termination" at the Ingress controller - meaning the external connection is encrypted (HTTPS), but the internal traffic between the controller and your Pods is usually plain HTTP, saving processing power on your application containers.
+
+**Prerequisite:** Before applying the Ingress, you must create a Kubernetes Secret of type `tls`.
+
+```bash
+# Command to create a TLS secret from your certificate files
+kubectl create secret tls myapp-tls-secret --cert=path/to/tls.crt --key=path/to/tls.key
+```
+
+**YAML Specification (`tls-ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-secured-ingress
+spec:
+  ingressClassName: nginx
+
+  # [NEW] TLS Configuration Block
+  tls:
+    - hosts:
+        - secure.example.com # The domain this certificate applies to
+      secretName: myapp-tls-secret # The K8s Secret containing the .crt and .key
+
+  # Standard Routing Rules
+  rules:
+    - host: secure.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: secure-app-service
+                port:
+                  number: 80
+```
+
+- **Explanation:** The `tls` array specifies which `hosts` should be secured using which `secretName`.
+  - When the Ingress controller reads this, it automatically configures itself to listen on port 443 (HTTPS) for `secure.example.com` and uses the provided certificate to encrypt the connection.
+  - **Note:** You can combine all three of these! You can have an Ingress that uses TLS, has multiple Hosts, and uses Path-based routing under each Host.
+
+### Essential `kubectl` Commands for Ingress
+
+| Command                                          | Explanation & Use Case                                                                                                                     | Example                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| `kubectl apply -f ingress.yaml`                  | Applies the routing rules to the cluster.                                                                                                  | `kubectl apply -f library-ingress.yaml`                      |
+| `kubectl get ingress` (`kubectl get ing`)        | Lists all Ingress resources. **Important:** Wait for the `ADDRESS` column to show an IP - this is the IP you map your DNS (`A Record`) to. | `kubectl get ing`                                            |
+| `kubectl describe ingress <name>`                | Shows the detailed routing table. Excellent for debugging to verify paths are mapped to the correct backend Services.                      | `kubectl describe ing library-system-ingress`                |
+| `kubectl delete ingress <name>`                  | Deletes the routing rules. Services and Pods continue running, but external access via these rules stops.                                  | `kubectl delete ing library-system-ingress`                  |
+| `kubectl logs -n ingress-nginx <nginx-pod-name>` | **Advanced debugging:** Inspect logs of the NGINX Ingress Controller Pod if routing is not working or configs are rejected.                | `kubectl logs -n ingress-nginx ingress-nginx-controller-xyz` |
+
+## 10. Helm (The Package Manager)
 
 **Concept:** Helm is like `apt` or `yum` or `maven` but for Kubernetes. It helps you install complex applications (like Prometheus, Jenkins, MySQL) with a single command.
 
