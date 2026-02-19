@@ -23,6 +23,7 @@
 8. [Storage: Persistent Volumes (PV) & Persistent Volume Claims (PVC)](#8-storage-persistent-volumes-pv--persistent-volume-claims-pvc)
 9. [Ingress: The Smart Router (Layer 7 Load Balancing)](#9-ingress-the-smart-router-layer-7-load-balancing)
 10. [Helm (The Package Manager)](#10-helm-the-package-manager)
+11. [StatefulSets: Managing Stateful Applications](#11-statefulsets-managing-stateful-applications)
 
 ## 1. Introduction to Kubernetes
 
@@ -1344,6 +1345,116 @@ helm list
 # See the underlying K8s resources Helm automatically created for you!
 kubectl get pods,svc
 ```
+
+## 11. StatefulSets: Managing Stateful Applications
+
+### What is a StatefulSet?
+
+Throughout this tutorial, we have used **Deployments** to manage our Pods. Deployments are designed for **stateless** applications (like a Spring Boot web server or a React frontend). In a Deployment, every Pod is an exact, interchangeable clone. If `frontend-pod-a7x9` crashes, Kubernetes replaces it with `frontend-pod-b2y4`, and the application doesn't care.
+
+However, **Stateful** applications (like databases: MySQL, MongoDB, Kafka, or Elasticsearch) care deeply about their identity and their data.
+
+- If you run a primary-replica database cluster, the replica must know the exact network address of the primary node to sync data.
+- If a database Pod restarts, it must reconnect to the exact same persistent storage volume it was using before it crashed.
+
+A **StatefulSet** is the Kubernetes workload API object used to manage these stateful applications. It manages the deployment and scaling of a set of Pods, and provides guarantees about the **ordering and uniqueness** of these Pods.
+
+### Key Features of a StatefulSet (Deployment vs. StatefulSet)
+
+- **Predictable, Ordered Pod Names:**
+  - `Deployment`: Pods get random hashes (`my-app-7b9c4d...`).
+  - `StatefulSet`: Pods get sticky, sequential, numbered names (`my-db-0`, `my-db-1`, `my-db-2`).
+- **Stable Network Identity:**
+  - Every Pod in a StatefulSet gets its own persistent DNS hostname. Even if `my-db-0` crashes and is recreated on a different Worker Node, its DNS name remains exactly the same, allowing other Pods to reconnect to it reliably.
+- **Stable, Dedicated Storage (`volumeClaimTemplates`):**
+  - `Deployment`: All Pods usually share the same PVC (if configured), or lose their data.
+  - `StatefulSet`: You do not create a single PVC. Instead, you provide a `volumeClaimTemplate`. When K8s spins up `my-db-0`, it dynamically creates a brand new PVC just for `my-db-0`. When it spins up `my-db-1`, it creates a separate PVC just for `my-db-1`. If `my-db-0` dies, K8s ensures the replacement Pod is reattached to that exact same PVC.
+- **Ordered Deployment and Scaling:**
+  - When you scale a StatefulSet to 3 replicas, it doesn't create them all at once. It starts `my-db-0`. It waits for `my-db-0` to be fully `Running` and `Ready`. Only then does it start `my-db-1`, and so on.
+  - When scaling down, it deletes them in reverse order (e.g., `my-db-2` is terminated before `my-db-1`).
+
+### The Prerequisite: The Headless Service
+
+To give each Pod in a StatefulSet a stable network identity, you **must** create a "Headless Service."
+A Headless Service is simply a standard Kubernetes Service, but you set `clusterIP: None`. This tells Kubernetes: "Do not load-balance traffic across these Pods. Instead, create a DNS record for every single Pod so they can be addressed individually."
+
+### YAML Specification (`statefulset.yaml`)
+
+A complete StatefulSet deployment requires two parts in the YAML file: The Headless Service and the StatefulSet itself.
+
+```yaml
+# --- Part 1: The Headless Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-headless-svc # The name used to generate the DNS records
+  labels:
+    app: mysql
+spec:
+  clusterIP: None # CRITICAL: This makes it "Headless"
+  ports:
+    - port: 3306
+      name: mysql
+  selector:
+    app: mysql
+
+# --- Part 2: The StatefulSet ---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-db # The base name for the Pods (mysql-db-0, mysql-db-1...)
+spec:
+  serviceName: "mysql-headless-svc" # CRITICAL: Links the StatefulSet to the Headless Service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql
+
+  # [1. The Pod Template]
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: mysql-data # Must match the template name below
+              mountPath: /var/lib/mysql
+
+  # [2. Volume Claim Templates - The Magic of StatefulSets]
+  # K8s will automatically create a PVC based on this template for EVERY Pod.
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+```
+
+**How to connect to these Pods:**
+
+Once deployed, other applications in the cluster can reach specific database nodes using their stable DNS names:
+
+- `mysql-db-0.mysql-headless-svc.default.svc.cluster.local` (Usually configured as the Primary/Master node)
+- `mysql-db-1.mysql-headless-svc.default.svc.cluster.local` (Usually a Read-Replica)
+
+### Essential `kubectl` Commands for StatefulSets
+
+|                    Command                     |                                                Explanation & Use Case                                                |                  Example                  |
+| :--------------------------------------------: | :------------------------------------------------------------------------------------------------------------------: | :---------------------------------------: |
+|      `kubectl apply -f statefulset.yaml`       |                                Creates the **Headless Service** and the StatefulSet.                                 |      `kubectl apply -f db-sts.yaml`       |
+| `kubectl get statefulsets` (`kubectl get sts`) |                                        Lists the StatefulSets in the cluster.                                        |             `kubectl get sts`             |
+|             `kubectl get pods -w`              | **Pro Tip:** Watch Pods start **one by one in order** (0 → 1 → 2). Extremely useful to verify StatefulSet behavior.  |    `kubectl get pods -l app=mysql -w`     |
+|               `kubectl get pvc`                |          Views the automatically generated PVCs (e.g. `mysql-data-mysql-db-0`, `mysql-data-mysql-db-1`, …).          |             `kubectl get pvc`             |
+|  `kubectl scale sts <name> --replicas=<num>`   |                   Scales the StatefulSet. **Scaling down deletes the highest-numbered Pod first.**                   | `kubectl scale sts mysql-db --replicas=5` |
+|          `kubectl delete sts <name>`           | Deletes the StatefulSet. **Important:** PVCs are **NOT** deleted automatically — this prevents accidental data loss. |       `kubectl delete sts mysql-db`       |
 
 ## References
 
