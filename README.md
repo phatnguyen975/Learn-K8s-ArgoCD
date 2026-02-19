@@ -137,6 +137,11 @@ You have multiple options:
 
 To follow this tutorial, we will use **Minikube** (a local single-node cluster) and **kubectl** (the CLI tool).
 
+- **kubectl:** The Kubernetes command-line tool. This is your steering wheel. You use it to run commands against Kubernetes clusters to deploy applications, inspect and manage cluster resources, and view logs.
+- **Minikube:** A lightweight Kubernetes implementation that creates a VM or container on your local machine and deploys a simple, single-node cluster inside it.
+
+Before starting, ensure you have a container runtime installed, such as **Docker**, as Minikube will need it to provision the cluster nodes.
+
 **Step 1: Install `kubectl` (The CLI)**
 
 - **Description:** This tool allows you to run commands against Kubernetes clusters.
@@ -169,10 +174,17 @@ sudo install minikube-linux-amd64 /usr/local/bin/minikube && rm minikube-linux-a
 # 2. Start the cluster (Using Docker as driver is recommended)
 minikube start --driver=docker
 
-# 3. Check cluster info and status
+# 3. Verify kubectl is connected to Minikube
 kubectl cluster-info
 kubectl get nodes
 ```
+
+- **Useful Commands:**
+  - `minikube status`: Checks the health of the Minikube components (host, kubelet, apiserver).
+  - `minikube ip`: Returns the IP address of the local cluster (useful for testing networking later).
+  - `minikube dashboard`: Kubernetes comes with a built-in web UI. This command enables the dashboard add-on and opens it in your default web browser, giving you a visual representation of your cluster.
+  - `minikube stop`: Safely shuts down the local cluster without deleting your deployed resources.
+  - `minikube delete`: Completely destroys the cluster and wipes all data.
 
 ## 4. Core Concepts (The Foundation)
 
