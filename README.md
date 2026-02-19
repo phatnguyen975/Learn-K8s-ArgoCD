@@ -689,93 +689,129 @@ spec:
 | `kubectl exec -it <name> -- <cmd>` |       Opens an interactive shell session inside the running Linux container. Useful for checking configurations or running local network tests.       |           `kubectl exec -it library-api-pod -- /bin/bash`           |
 |    `kubectl delete pod <name>`     |                Destroys the Pod. (**Note:** If this Pod was created by a Deployment, a new one will instantly spin up to replace it).                 |                `kubectl delete pod library-api-pod`                 |
 
-## 4. Core Concepts (The Foundation)
+### ReplicaSet
 
-### Pods
+**1. What is a ReplicaSet?**
 
-**Definition:** The smallest deployable unit in K8s. A Pod represents a single instance of a running process (usually one container, sometimes more).
+As mentioned in the Pod section, Pods are ephemeral. If a worker node crashes, or if a Pod gets evicted due to lack of memory, that Pod is gone forever. Kubernetes does not automatically bring an unmanaged Pod back to life.
 
-**YAML Structure (`pod.yaml`):**
+A **ReplicaSet (RS)** solves this problem. Its sole purpose is to maintain a stable set of replica Pods running at any given time. It acts as a "guardian" or a thermostat for your application. If you tell a ReplicaSet, "I always want 3 instances of my backend API running," it will constantly monitor the cluster to ensure exactly 3 instances exist.
 
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx-pod
-  labels:
-    app: my-website
-spec:
-  containers:
-    - name: nginx-container
-      image: nginx:latest
-      ports:
-        - containerPort: 80
-```
+**2. How Does It Work? (Labels and Selectors)**
 
-**Key Commands:**
+A ReplicaSet does not strictly "own" Pods; it selects them based on **Labels**.
 
-|                Command                 |                                Explanation                                |                  Example                   |
-| :------------------------------------: | :-----------------------------------------------------------------------: | :----------------------------------------: |
-|       `kubectl apply -f <file>`        |           Creates or updates resources defined in a YAML file.            |        `kubectl apply -f pod.yaml`         |
-|           `kubectl get pods`           |                 Lists all pods in the current namespace.                  | `kubectl get pods -o wide` (shows IP/Node) |
-|     `kubectl describe pod <name>`      | Shows detailed info (events, errors, config). **Critical for debugging.** |      `kubectl describe pod nginx-pod`      |
-|         `kubectl logs <name>`          |                Prints the stdout/stderr of the container.                 |          `kubectl logs nginx-pod`          |
-| `kubectl exec -it <name> -- /bin/bash` |             Opens an interactive shell inside the container.              | `kubectl exec -it nginx-pod -- /bin/bash`  |
+- The ReplicaSet uses a `selector` to count how many Pods currently exist with a specific label (e.g., `app: library-api`).
+- If there are too few Pods (e.g., 2 instead of 3), the ReplicaSet uses its embedded Pod `template` to create a new one.
+- If there are too many Pods (e.g., you manually created a Pod with the same label, making it 4), the ReplicaSet will ruthlessly terminate one of them to maintain the desired state of 3.
 
-### Namespaces
+**3. Why We Rarely Use Them Directly**
 
-**Definition:** A mechanism to isolate groups of resources within a single cluster (e.g., `dev`, `staging`, `prod`).
-
-```bash
-# Create a namespace
-kubectl create namespace dev
-
-# Run a pod inside that namespace
-kubectl apply -f pod.yaml -n dev
-```
-
-## 5. Workload Management (Controllers)
-
-Managing individual Pods is manual and risky. We use Controllers to manage them.
+**Crucial Note:** While understanding ReplicaSets is fundamental, **you will almost never create a ReplicaSet directly in a production environment**. Instead, you create a **Deployment**. A Deployment automatically creates and manages ReplicaSets for you, while adding the ability to do zero-downtime rolling updates (which ReplicaSets cannot do on their own).
 
 ### Deployment
 
-**Definition:** Manages a set of identical Pods (via ReplicaSets). It ensures the desired number of pods are running and handles rolling updates.
+**1. What is a Deployment?**
 
-**YAML Structure (`deployment.yaml`):**
+While a ReplicaSet ensures that a specific number of Pods are running, it has a major limitation: it does not handle application updates gracefully. If you change the Docker image version in a ReplicaSet YAML and apply it, the running Pods will not be updated. You would have to manually delete the old Pods so the ReplicaSet can recreate them with the new image.
+
+A **Deployment** is a higher-level concept that manages ReplicaSets and provides declarative, zero-downtime updates to your application. It acts as the "manager" that dictates how and when your Pods should transition from one version to the next.
+
+**2. Key Capabilities of a Deployment**
+
+- **Rolling Updates (Zero Downtime):** When you release a new version of your application, the Deployment creates a new ReplicaSet. It then smoothly scales up the new ReplicaSet while simultaneously scaling down the old ReplicaSet. The application remains available to users throughout the entire process.
+- **Rollbacks:** If a new deployment has a bug or crashes on startup, the Deployment keeps a history of your previous ReplicaSets. You can instantly rollback to a previous, stable version with a single command.
+- **Pausing and Resuming:** You can pause a Deployment, make multiple configuration changes (like updating CPU limits, changing environment variables, and updating the image), and then resume it to apply all changes as a single rollout.
+- **Scaling:** Like ReplicaSets, Deployments can be easily scaled up or down manually or via an autoscaler.
+
+**3. The Rolling Update Strategy**
+
+To achieve zero downtime, a Deployment uses two crucial mathematical parameters during an update:
+
+- `maxSurge`: How many Pods can be created above the desired number of replicas during an update. (e.g., If `replicas=3` and `maxSurge=1`, the Deployment will temporarily run 4 Pods).
+- `maxUnavailable`: How many Pods can be completely offline below the desired number of replicas during an update. (e.g., If `replicas=3` and `maxUnavailable=0`, there will always be at least 3 Pods running to serve traffic).
+
+**4. Detailed Deployment YAML Specification (`deployment.yaml`)**
+
+Continuing with the backend example, here is how you define a complete, production-ready Deployment for a Java Spring Boot application.
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: my-deployment
+  name: library-api-deployment # The name of the Deployment
+  labels:
+    app: library-api
+    env: production
 spec:
-  replicas: 3 # Desired number of pods
+  # [1. Replicas] The total number of Pods you want running
+  replicas: 3
+
+  # [2. Strategy] How the Deployment handles updates
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1 # Can spin up 1 extra Pod during rollout (Total: 4)
+      maxUnavailable: 0 # Never drop below the 3 requested Pods
+
+  # [3. Selector] How the Deployment finds the Pods it owns
   selector:
     matchLabels:
-      app: my-app # Must match the template labels below
-  template: # The blueprint for the Pods
+      app: library-api
+
+  # [4. Pod Template] The exact blueprint for the Pods.
+  # Note: The Deployment creates a ReplicaSet using this template.
+  template:
     metadata:
       labels:
-        app: my-app
+        app: library-api # Must match the selector above!
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.25
+        - name: library-spring-boot
+          image: myrepo/library-api:v2.0.0 # Updating this triggers a Rolling Update
+          imagePullPolicy: Always
+
           ports:
-            - containerPort: 80
+            - containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # Probes are heavily relied upon by Deployments.
+          # The Deployment will NOT route traffic to a new Pod or kill an old Pod
+          # until the new Pod's readinessProbe passes!
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
 ```
 
-**Key Commands:**
+**5. Essential `kubectl` Commands for Deployments**
 
-|                            Command                            |                            Explanation                            |
-| :-----------------------------------------------------------: | :---------------------------------------------------------------: |
-|                   `kubectl get deployments`                   |                         List deployments.                         |
-|              `kubectl apply -f deployment.yaml`               | Apply the desired state defined in the YAML file to your cluster. |
-|        `kubectl scale deployment <name> --replicas=5`         |           Manually scale the number of pods up or down.           |
-| `kubectl set image deployment <name> <container>=<new-image>` |       Update the image version (triggers a Rolling Update).       |
-|          `kubectl rollout status deployment <name>`           |                 Watch the progress of an update.                  |
-|           `kubectl rollout undo deployment <name>`            |     Rollback to the previous version if the new one crashes.      |
+Deployments introduce the `rollout` command suite, which is critical for managing the lifecycle of your application.
+
+|                            Command                            |                                                             Explanation & Use Case                                                             |                                               Example                                               |
+| :-----------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------: |
+|              `kubectl apply -f deployment.yaml`               |                                                       Creates or updates the Deployment.                                                       |                               `kubectl apply -f library-deploy.yaml`                                |
+|                   `kubectl get deployments`                   | Lists Deployments. Shows `READY` (current/desired), `UP-TO-DATE` (pods matching the current template), and `AVAILABLE` (pods serving traffic). |                                        `kubectl get deploy`                                         |
+| `kubectl set image deployment <name> <container>=<new-image>` |                                Imperatively updates the Docker image, immediately triggering a rolling update.                                 | `kubectl set image deployment library-api-deployment library-spring-boot=myrepo/library-api:v2.1.0` |
+|          `kubectl rollout status deployment <name>`           |            **Crucial:** Watches the real-time progress of a rolling update (e.g., “Waiting for replica set to finish scaling...”).             |                       `kubectl rollout status deploy library-api-deployment`                        |
+|          `kubectl rollout history deployment <name>`          |                                       Shows a list of previous Revisions (versions) of this Deployment.                                        |                       `kubectl rollout history deploy library-api-deployment`                       |
+|           `kubectl rollout undo deployment <name>`            |                          Instantly rolls back the Deployment to the previous working version if the new code crashes.                          |                        `kubectl rollout undo deploy library-api-deployment`                         |
+| `kubectl rollout undo deployment <name> --to-revision=<num>`  |                                           Rolls back to a specific, older revision from the history.                                           |                `kubectl rollout undo deploy library-api-deployment --to-revision=2`                 |
+|      `kubectl scale deployment <name> --replicas=<num>`       |                                                     Scales the number of Pods up or down.                                                      |                     `kubectl scale deploy library-api-deployment --replicas=5`                      |
 
 ## 6. Networking
 
