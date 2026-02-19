@@ -340,6 +340,256 @@ These are the most critical commands for troubleshooting when things go wrong.
 
 ## 5. Anatomy of a Kubernetes YAML Manifest
 
+### The 4 Universal Root Fields
+
+1. `apiVersion`: Which version of the Kubernetes API you're using to create this object.
+
+- **Examples:** `v1` (for Pods, Services, ConfigMaps), `apps/v1` (for Deployments, StatefulSets), `networking.k8s.io/v1` (for Ingress).
+
+2. `kind`: What kind of object you want to create.
+
+- **Examples:** `Pod`, `Deployment`, `Service`, `Secret`, `Ingress`. (**Note:** Case-sensitive, always capitalized)
+
+3. `metadata`: Data that uniquely identifies the object.
+
+- `name`: The **unique** name of the resource **(required)**.
+- `namespace`: Where it lives (defaults to `default`).
+- `labels`: Key-value pairs used to organize and select resources (e.g., `app: frontend`, `env: prod`). **Crucial for linking resources together.**
+
+4. `spec`: The actual specification or "meat" of the resource. This field dictates exactly what the resource should look like and how it behaves. The contents of `spec` are entirely dependent on the `kind`.
+
+### The Pod `spec`
+
+The Pod `spec` defines the containers running inside it.
+
+```yaml
+spec:
+  # [1. Containers Array] - A Pod can have one or more containers.
+  containers:
+    - name: my-app-container # Name of the container inside the pod
+      image: my-repo/my-app:1.0.0 # The Docker image to pull
+      imagePullPolicy: IfNotPresent # When to pull (Always, IfNotPresent, Never)
+
+      # [2. Ports] - Which ports the container is listening on
+      ports:
+        - containerPort: 8080 # The port your app is actually using
+
+      # [3. Environment Variables] - Passing config to the container
+      env:
+        - name: DATABASE_URL # Standard key-value
+          value: "jdbc:mysql://db:3306/mydb"
+        - name: DB_PASSWORD # Pulling a value from a K8s Secret
+          valueFrom:
+            secretKeyRef:
+              name: my-db-secret
+              key: password
+
+      # [4. Resource Requests & Limits] - VERY IMPORTANT for stability
+      resources:
+        requests: # What the pod needs to start (Scheduler uses this)
+          memory: "256Mi"
+          cpu: "250m" # 250 millicores (1/4 of a CPU)
+        limits: # The *maximum* it can use before getting killed (OOMKilled)
+          memory: "512Mi"
+          cpu: "500m"
+```
+
+### The Deployment `spec`
+
+A Deployment wraps around a Pod to provide scaling and updates.
+
+```yaml
+spec:
+  # [1. Replicas] - How many identical Pods do you want running?
+  replicas: 3
+
+  # [2. Selector] - How does the Deployment know which Pods belong to it?
+  selector:
+    matchLabels:
+      app: my-web-app # It will manage all pods with this label
+
+  # [3. Strategy] - How to perform updates?
+  strategy:
+    type: RollingUpdate # Updates pods one by one (Zero downtime)
+    rollingUpdate:
+      maxSurge: 1 # Can create 1 extra pod during update
+      maxUnavailable: 0 # Cannot drop below desired replica count during update
+
+  # [4. Template] - The actual Pod blueprint. Notice it contains 'metadata' and 'spec' just like a Pod!
+  template:
+    metadata:
+      labels:
+        app: my-web-app # MUST match the selector above!
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25
+          ports:
+            - containerPort: 80
+```
+
+### The Service `spec`
+
+A Service provides networking and load balancing.
+
+- `ClusterIP`: **(Default)** Exposes the Service on an internal IP. Only accessible within the cluster.
+- `NodePort`: Exposes the Service on each Node's IP at a static port (30000-32767). Accessible externally.
+- `LoadBalancer`: Exposes the Service externally using a cloud provider's Load Balancer (AWS ELB, GCP LB).
+
+```yaml
+spec:
+  # [1. Type] - How the service is exposed
+  type: ClusterIP # Default. Internal access only. (Others: NodePort, LoadBalancer)
+
+  # [2. Selector] - Which Pods should receive this traffic?
+  selector:
+    app: my-web-app # Routes traffic to pods with this label
+
+  # [3. Ports Array] - Mapping service ports to pod ports
+  ports:
+    - protocol: TCP # Default. (Others: UDP, SCTP)
+      port: 80 # The port the Service exposes to the cluster
+      targetPort: 8080 # The port the actual Container is listening on
+      # nodePort: 30005 # Only used if type is NodePort (Exposes port on host machine)
+```
+
+### The Ingress `spec` (Layer 7 Routing)
+
+While a `Service` (like `NodePort` or `LoadBalancer`) exposes an application at the network level (Layer 4 - IP and Port), an **Ingress** operates at the application layer (Layer 7 - HTTP/HTTPS). It acts as a smart router or reverse proxy, allowing you to route external traffic to different Services based on the requested URL domain (host) or the URL path.
+
+**Crucial Note:** An Ingress resource is just a set of routing rules. It does **absolutely nothing** unless you have an **Ingress Controller** (like NGINX, Traefik, or HAProxy) running in your cluster to actually read these rules and process the traffic.
+
+1. **Path-Based Routing (Simple Fanout)**
+
+**Concept:** Path-based routing (also known as a simple fanout) allows you to route traffic from a single IP address and a single domain name to multiple backend Services based on the HTTP URI (the path after the domain).
+
+**Use case:** You have one domain `example.com`. You want `example.com/api` to hit your backend Java Spring Boot service, and `example.com/web` to hit your frontend React service.
+
+**YAML Specification (`path-based-ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: path-based-ingress
+  annotations:
+    # Often needed if your backend doesn't expect the /api prefix
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: myapp.example.com # The single domain name
+      http:
+        paths:
+          # Rule 1: Traffic to /api goes to the backend service
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-api-service
+                port:
+                  number: 8080
+
+          # Rule 2: Traffic to /web goes to the frontend service
+          - path: /web
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-web-service
+                port:
+                  number: 80
+```
+
+- **Explanation:** The Ingress controller evaluates the paths in order. Because `pathType` is set to `Prefix`, a request to `myapp.example.com/api/v1/users` will match the `/api` rule and be forwarded to the `backend-api-service` on port `8080`.
+
+2. **Host-Based Routing (Name-Based Virtual Hosting)**
+
+**Concept:** Host-based routing supports routing HTTP traffic to multiple hostnames (domains or subdomains) using the same Ingress IP address. The Ingress controller inspects the HTTP `Host` header of the incoming request to determine which backend Service should receive it.
+
+**Use case:** You have two completely separate applications sharing the same cluster. `api.example.com` needs to go to Service A, and `admin.example.com` needs to go to Service B.
+
+**YAML Specification (`host-based-ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: host-based-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    # Host 1: API Subdomain
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 8080
+
+    # Host 2: Admin Subdomain
+    - host: admin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-service
+                port:
+                  number: 80
+```
+
+- **Explanation:** In this `spec`, there are two separate items in the `rules` array, each defining a different `host`. If a user types `api.example.com` into their browser, the DNS resolves to the Ingress controller's IP. The controller sees the `Host: api.example.com` header and routes the traffic exclusively to the `api-service`.
+
+3. **TLS (HTTPS Setup)**
+
+**Concept:** By default, Ingress traffic is unencrypted (HTTP). You can secure an Ingress by specifying a `tls` section containing a Secret that holds a TLS private key and certificate. This enables "TLS Termination" at the Ingress controller - meaning the external connection is encrypted (HTTPS), but the internal traffic between the controller and your Pods is usually plain HTTP, saving processing power on your application containers.
+
+**Prerequisite:** Before applying the Ingress, you must create a Kubernetes Secret of type `tls`.
+
+```bash
+# Command to create a TLS secret from your certificate files
+kubectl create secret tls myapp-tls-secret --cert=path/to/tls.crt --key=path/to/tls.key
+```
+
+**YAML Specification (`tls-ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-secured-ingress
+spec:
+  ingressClassName: nginx
+
+  # [NEW] TLS Configuration Block
+  tls:
+    - hosts:
+        - secure.example.com # The domain this certificate applies to
+      secretName: myapp-tls-secret # The K8s Secret containing the .crt and .key
+
+  # Standard Routing Rules
+  rules:
+    - host: secure.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: secure-app-service
+                port:
+                  number: 80
+```
+
+- **Explanation:** The `tls` array specifies which `hosts` should be secured using which `secretName`.
+  - When the Ingress controller reads this, it automatically configures itself to listen on port 443 (HTTPS) for `secure.example.com` and uses the provided certificate to encrypt the connection.
+  - **Note:** You can combine all three of these! You can have an Ingress that uses TLS, has multiple Hosts, and uses Path-based routing under each Host.
+
 ## 4. Core Concepts (The Foundation)
 
 ### Pods
