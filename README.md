@@ -14,6 +14,7 @@
 4. [The Developer's Toolkit: Mastering `kubectl`](#4-the-developers-toolkit-mastering-kubectl)
 5. [Anatomy of a Kubernetes YAML Manifest](#5-anatomy-of-a-kubernetes-yaml-manifest)
 6. [Core Components](#6-core-components)
+7. [Configuration Management: ConfigMaps and Secrets](#7-configuration-management-configmaps-and-secrets)
 
 ## 1. Introduction to Kubernetes
 
@@ -623,7 +624,7 @@ Pods are ephemeral (temporary). They are not designed to live forever. When a Po
 - **Failed:** All containers have terminated, but at least one failed (exited with a non-zero status, like an application crash).
 - **CrashLoopBackOff:** A very common state. It means a container repeatedly crashes immediately after starting, and Kubernetes is waiting longer and longer intervals before trying to restart it again.
 
-**5. Detailed Pod YAML Specification (`pod.yaml`)**
+**5. YAML Specification (`pod.yaml`)**
 
 Here is a comprehensive YAML example of a Pod running a Java application, detailing the most important `spec` configurations.
 
@@ -731,7 +732,7 @@ To achieve zero downtime, a Deployment uses two crucial mathematical parameters 
 - `maxSurge`: How many Pods can be created above the desired number of replicas during an update. (e.g., If `replicas=3` and `maxSurge=1`, the Deployment will temporarily run 4 Pods).
 - `maxUnavailable`: How many Pods can be completely offline below the desired number of replicas during an update. (e.g., If `replicas=3` and `maxUnavailable=0`, there will always be at least 3 Pods running to serve traffic).
 
-**4. Detailed Deployment YAML Specification (`deployment.yaml`)**
+**4. YAML Specification (`deployment.yaml`)**
 
 Continuing with the backend example, here is how you define a complete, production-ready Deployment for a Java Spring Boot application.
 
@@ -813,61 +814,123 @@ Deployments introduce the `rollout` command suite, which is critical for managin
 | `kubectl rollout undo deployment <name> --to-revision=<num>`  |                                           Rolls back to a specific, older revision from the history.                                           |                `kubectl rollout undo deploy library-api-deployment --to-revision=2`                 |
 |      `kubectl scale deployment <name> --replicas=<num>`       |                                                     Scales the number of Pods up or down.                                                      |                     `kubectl scale deploy library-api-deployment --replicas=5`                      |
 
-## 6. Networking
+### Service
 
-Pods are ephemeral (they die and change IPs). **Services** provide a stable network endpoint.
+## 7. Configuration Management: ConfigMaps and Secrets
 
-### Service Types
+### ConfigMaps (Non-Sensitive Data)
 
-1. **ClusterIP (Default):** Exposes the Service on an internal IP. Only accessible within the cluster.
-2. **NodePort:** Exposes the Service on each Node's IP at a static port (30000-32767). Accessible externally.
-3. **LoadBalancer:** Exposes the Service externally using a cloud provider's Load Balancer (AWS ELB, GCP LB).
+**1. What is a ConfigMap?**
 
-**YAML Structure (`service.yaml`):**
+A ConfigMap is an API object used to store non-confidential data in key-value pairs. Pods can consume ConfigMaps as environment variables, command-line arguments, or as configuration files in a volume.
+
+- **Use Cases:** Database URLs, feature flags, application port numbers, plain-text configuration files (like `application.properties` or `nginx.conf`).
+
+**2. YAML Specification (`configmap.yaml`)**
 
 ```yaml
 apiVersion: v1
-kind: Service
+kind: ConfigMap
 metadata:
-  name: my-service
+  name: library-api-config # The name referenced by the Pod
+  namespace: default
+data:
+  # Key-Value pairs
+  DB_HOST: "postgres-svc.database.svc.cluster.local"
+  DB_PORT: "5432"
+  SPRING_PROFILES_ACTIVE: "prod"
+
+  # You can also store entire multi-line files as a value!
+  application.properties: |
+    server.port=8080
+    logging.level.root=INFO
+    library.feature-flag.new-ui=true
+```
+
+### Secrets (Sensitive Data)
+
+**1. What is a Secret?**
+
+A Secret is an object that contains a small amount of sensitive data such as passwords, OAuth tokens, or SSH keys. Putting this information in a Secret is safer and more flexible than putting it verbatim in a Pod definition or a container image.
+
+**Crucial Security Note:** By default, Kubernetes Secrets are **NOT encrypted** in the YAML file or in the `etcd` database; they are merely **Base64 encoded**. Base64 is an encoding mechanism, not encryption. Anyone who can read the Secret object can decode it. (In production, you must enable `etcd` encryption at rest or use external tools like HashiCorp Vault or AWS Secrets Manager).
+
+**2. YAML Specification (`secret.yaml`)**
+
+To write a Secret YAML, you must first Base64 encode your values. (In Linux/macOS: `echo -n 'my-super-secret-password' | base64` -> `bXktc3VwZXItc2VjcmV0LXBhc3N3b3Jk`)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: library-db-credentials
+type: Opaque # Opaque means arbitrary user-defined key/value pairs
+data: # ALL values here MUST be Base64 encoded
+  username: YWRtaW4= # Decodes to: admin
+  password: bXktc3VwZXItc2VjcmV0LXBhc3N3b3Jk
+```
+
+### Injecting Configs & Secrets into a Pod/Deployment
+
+This is where the magic happens. Here is how you modify your Deployment's `spec.template.spec` to use the ConfigMap and Secret we just created.
+
+**Injection Methods**
+
+- **As Environment Variables:** Best for simple key-value pairs.
+- **As Mounted Volumes:** Best for injecting entire files (like `.properties` or `.conf` files).
+
+```yaml
+# Inside your Deployment's Pod template...
 spec:
-  type: NodePort # or ClusterIP, LoadBalancer
-  selector:
-    app: my-app # Connects this service to pods with label 'app: my-app'
-  ports:
-    - protocol: TCP
-      port: 80 # Port exposed by the Service
-      targetPort: 80 # Port running inside the Container
-      nodePort: 30007 # (Optional) Specific port for external access
+  containers:
+    - name: library-spring-boot
+      image: myrepo/library-api:v2.0.0
+
+      # --- METHOD 1: Injecting as Environment Variables ---
+      env:
+        # A. Injecting a specific key from a ConfigMap
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: library-api-config
+              key: DB_HOST
+
+        # B. Injecting a specific key from a Secret
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: library-db-credentials
+              key: password
+
+      # C. Injecting ALL keys from a ConfigMap as env vars at once
+      envFrom:
+        - configMapRef:
+            name: library-api-config
+
+      # --- METHOD 2: Injecting as a Mounted Volume ---
+      volumeMounts:
+        - name: app-config-volume # Must match the volume name below
+          mountPath: /app/config # Where the file will appear inside the Linux container
+          readOnly: true
+
+  # Defining the Volumes that the container can mount
+  volumes:
+    - name: app-config-volume
+      configMap:
+        name: library-api-config # Mounts the 'application.properties' file here
 ```
 
-## 7. Configuration & Storage
+**Essential `kubectl` Commands for ConfigMaps & Secrets**
 
-Separating configuration from container images is a best practice (The 12-Factor App).
-
-### ConfigMaps & Secrets
-
-- **ConfigMap:** Stores non-sensitive data (config files, environment variables).
-- **Secret:** Stores sensitive data (passwords, keys) encoded in Base64.
-
-**Example: Creating a Secret (CLI method)**
-
-```bash
-# Create a secret named "db-pass"
-kubectl create secret generic db-pass --from-literal=password="MySuperSecretPass"
-
-# Verify
-kubectl get secrets
-```
-
-### Persistent Volumes (PV) & Persistent Volume Claims (PVC)
-
-Containers are ephemeral; when they restart, file system data is lost. PV/PVC provides permanent storage.
-
-- **PV:** A piece of storage in the cluster (Physical Hard Drive, AWS EBS).
-- **PVC:** A request for storage by a user (e.g., "I need 5GB").
-
-**Flow:** Pod requests -> PVC -> binds to -> PV.
+|                               Command                               |                                                  Explanation & Use Case                                                  |                                    Example                                    |
+| :-----------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------: |
+|   `kubectl create configmap <name> --from-literal=<key>=<value>`    |                              Imperatively creates a ConfigMap quickly without a YAML file.                               |             `kubectl create cm app-config --from-literal=ENV=dev`             |
+|        `kubectl create configmap <name> --from-file=<path>`         |                      Creates a ConfigMap from an existing local file (e.g., an Nginx config file).                       |            `kubectl create cm nginx-conf --from-file=./nginx.conf`            |
+| `kubectl create secret generic <name> --from-literal=<key>=<value>` | Imperatively creates a Secret. **Tip:** Often preferred over YAML because kubectl automatically handles Base64 encoding. | `kubectl create secret generic db-pass --from-literal=password='P@ssw0rd123'` |
+|              `kubectl get cm` / `kubectl get secrets`               |                                Lists the existing ConfigMaps or Secrets in the namespace.                                |                             `kubectl get secrets`                             |
+|                    `kubectl describe cm <name>`                     |                                  Shows the contents of a ConfigMap (plain-text values).                                  |                   `kubectl describe cm library-api-config`                    |
+|                  `kubectl describe secret <name>`                   |                        Shows the keys inside a Secret, but hides the actual values for security.                         |               `kubectl describe secret library-db-credentials`                |
+|                 `kubectl get secret <name> -o yaml`                 |                         Outputs the Secret in YAML format, revealing the Base64-encoded strings.                         |              `kubectl get secret library-db-credentials -o yaml`              |
 
 ## 8. Advanced Concepts
 
