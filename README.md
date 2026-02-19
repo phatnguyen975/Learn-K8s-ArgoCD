@@ -13,13 +13,14 @@
 3. [Environment Setup](#3-environment-setup)
 4. [The Developer's Toolkit: Mastering `kubectl`](#4-the-developers-toolkit-mastering-kubectl)
 5. [Anatomy of a Kubernetes YAML Manifest](#5-anatomy-of-a-kubernetes-yaml-manifest)
-6. [Core Components](#6-core-components)
-   6.1. [Pod](#pod)
-   6.2. [ReplicaSet](#replicaset)
-   6.3. [Deployment](#deployment)
-   6.4. [Service](#service)
+6. [Core Components](#6-core-components) \
+   6.1. [Pod](#pod) \
+   6.2. [ReplicaSet](#replicaset) \
+   6.3. [Deployment](#deployment) \
+   6.4. [Service](#service) \
    6.5. [Namespace](#namespace)
 7. [Configuration Management: ConfigMaps and Secrets](#7-configuration-management-configmaps-and-secrets)
+8. [Storage: Persistent Volumes (PV) & Persistent Volume Claims (PVC)](#8-storage-persistent-volumes-pv--persistent-volume-claims-pvc)
 
 ## 1. Introduction to Kubernetes
 
@@ -1091,7 +1092,7 @@ spec:
         name: library-api-config # Mounts the 'application.properties' file here
 ```
 
-**Essential `kubectl` Commands for ConfigMaps & Secrets**
+### Essential `kubectl` Commands for ConfigMaps & Secrets
 
 |                               Command                               |                                                  Explanation & Use Case                                                  |                                    Example                                    |
 | :-----------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------: |
@@ -1102,6 +1103,113 @@ spec:
 |                    `kubectl describe cm <name>`                     |                                  Shows the contents of a ConfigMap (plain-text values).                                  |                   `kubectl describe cm library-api-config`                    |
 |                  `kubectl describe secret <name>`                   |                        Shows the keys inside a Secret, but hides the actual values for security.                         |               `kubectl describe secret library-db-credentials`                |
 |                 `kubectl get secret <name> -o yaml`                 |                         Outputs the Secret in YAML format, revealing the Base64-encoded strings.                         |              `kubectl get secret library-db-credentials -o yaml`              |
+
+## 8. Storage: Persistent Volumes (PV) & Persistent Volume Claims (PVC)
+
+### The Ephemeral Storage Problem
+
+By design, containers in Kubernetes are ephemeral (temporary). If a container crashes or a Pod is deleted during an update, Kubernetes will spin up a new one, but **any data generated inside that container is completely wiped out.**
+
+While this is perfectly fine for stateless applications (like a React frontend or a Spring Boot API), it is disastrous for stateful applications (like MySQL or PostgreSQL databases) where data loss is unacceptable. Kubernetes solves this by decoupling the lifecycle of storage from the lifecycle of the Pod using the PV and PVC architecture.
+
+### What is a Persistent Volume (PV)?
+
+A Persistent Volume (PV) is an actual piece of physical or virtual storage in the cluster. It is either provisioned manually by a cluster administrator or provisioned dynamically by the system using a `StorageClass`.
+
+- **Examples:** An NFS (Network File System) share, a cloud provider's disk (like AWS EBS, GCP Persistent Disk, or Azure Disk), or even a local directory on a Worker Node.
+- **Core Concept:** A PV is a cluster-level resource (it does not belong to any specific Namespace). Its lifecycle is entirely independent of any individual Pod. If a Pod dies, the PV and its data remain intact.
+
+### What is a Persistent Volume Claim (PVC)?
+
+A Persistent Volume Claim (PVC) is a "request for storage" made by a developer or an application.
+
+Instead of a Pod connecting directly to a physical hard drive, the Pod submits a request via a PVC: "I need a 5GB volume with read/write access." When you create a PVC, Kubernetes automatically looks for an available PV that satisfies those requirements (size and access mode) and **binds** them together in a 1-to-1 relationship. The Pod then simply mounts the PVC as a standard volume.
+
+### Access Modes
+
+When defining PVs and PVCs, you must specify how the storage volume can be mounted to the Worker Nodes. The three primary modes are:
+
+- **`ReadWriteOnce` (RWO):** The volume can be mounted as read-write by a single Node. (Standard for most databases).
+- **`ReadOnlyMany` (ROX):** The volume can be mounted as read-only by many Nodes simultaneously.
+- **`ReadWriteMany` (RWX):** The volume can be mounted as read-write by many Nodes simultaneously. (Requires specific network storage solutions like NFS or AWS EFS).
+
+### YAML Specifications
+
+**Example 1: Creating a Persistent Volume (PV)**
+
+(**Note:** In modern cloud environments, PVs are usually created automatically via Dynamic Provisioning, but creating one manually is essential for local testing like Minikube).
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: my-manual-pv
+spec:
+  capacity:
+    storage: 10Gi # Allocates 10 Gigabytes of storage
+  accessModes:
+    - ReadWriteOnce # Only one Node can mount this for reading/writing
+  persistentVolumeReclaimPolicy: Retain # When the PVC is deleted, Retain the data on the PV
+  hostPath: # Uses a directory on the Worker Node (Great for Minikube testing)
+    path: "/mnt/data/mysql"
+```
+
+**Example 2: Creating a Persistent Volume Claim (PVC)**
+
+(This is the file the developer writes to request the storage).
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-database-pvc # The name of the storage claim
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce # Must match the Access Mode of an available PV
+  resources:
+    requests:
+      storage: 5Gi # Requesting 5GB of storage
+```
+
+**Example 3: Mounting the PVC into a Pod**
+
+To make a Pod store data permanently, you must modify the Pod's `spec` to use the PVC.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mysql-database-pod
+spec:
+  containers:
+    - name: mysql-container
+      image: mysql:8.0
+      env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "mypassword"
+
+      # [1. Mount the volume inside the Container]
+      volumeMounts:
+        - name: database-storage # This name must perfectly match the volume name below
+          mountPath: /var/lib/mysql # The internal path where MySQL expects to save its data
+
+  # [2. Define the Volume and link it to the PVC]
+  volumes:
+    - name: database-storage
+      persistentVolumeClaim:
+        claimName: mysql-database-pvc # Points exactly to the PVC we created in Example 2
+```
+
+### Essential `kubectl` Commands for Storage
+
+|            Command             |                                                                  Explanation & Use Case                                                                   |                  Example                  |
+| :----------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------: | :---------------------------------------: |
+| `kubectl apply -f <file.yaml>` |                                                       Creates the PV or PVC from the YAML manifest.                                                       |     `kubectl apply -f mysql-pvc.yaml`     |
+|        `kubectl get pv`        |                          Lists all **PersistentVolumes** in the cluster. Shows total capacity, access modes, and the bound PVC.                           |             `kubectl get pv`              |
+|       `kubectl get pvc`        |       Lists all **PersistentVolumeClaims** in the current Namespace. **Crucial:** If `STATUS` is `Bound`, the PVC is successfully attached to a PV.       |             `kubectl get pvc`             |
+| `kubectl describe pvc <name>`  | Shows detailed information about the PVC. Extremely useful when a PVC is stuck in `Pending` (often due to insufficient space or mismatched access modes). | `kubectl describe pvc mysql-database-pvc` |
+|  `kubectl delete pvc <name>`   |            Deletes the storage claim. Whether the underlying data is deleted or retained depends on the PV’s `persistentVolumeReclaimPolicy`.             |  `kubectl delete pvc mysql-database-pvc`  |
 
 ## 8. Advanced Concepts
 
