@@ -57,64 +57,74 @@ Kubernetes does orchestration at cluster scale.
 
 Kubernetes is the industry standard for cloud-native applications because it provides a robust set of features out of the box.
 
-- **Automated Rollouts and Rollbacks**
+- **Automated Rollouts and Rollbacks** \
   Kubernetes allows you to describe the desired state for your deployed containers. When integrated with CI/CD tools like Jenkins, you can automate the process of rolling out new code. If you deploy a new version of your application, Kubernetes will progressively update the containers one by one to ensure zero downtime. If the new version fails or has a bug, Kubernetes can automatically roll back to the previous, stable version.
 
-- **Self-Healing Capabilities**
+- **Self-Healing Capabilities** \
   Kubernetes constantly monitors the health of your nodes and containers. If a container crashes, Kubernetes automatically restarts it. If a worker node fails entirely, Kubernetes will reschedule the containers that were running on that node to other healthy nodes in the cluster. It also kills containers that do not respond to your user-defined health checks and does not route traffic to them until they are ready to serve requests.
 
-- **Service Discovery and Load Balancing**
+- **Service Discovery and Load Balancing** \
   Containers are ephemeral; they are created and destroyed frequently, meaning their IP addresses constantly change. Kubernetes solves this by giving containers their own IP addresses and a single DNS name for a set of containers. It can also distribute network traffic (load balancing) across these containers so that the deployment is stable, without requiring you to modify your application code.
 
-- **Horizontal Scaling**
+- **Horizontal Scaling** \
   You can scale your application up and down quickly and easily. This can be done manually via a simple command or a UI, or automatically based on CPU usage, memory consumption, or even custom metrics. During a traffic spike, Kubernetes can rapidly spin up new container instances to handle the load and then terminate them when the traffic subsides to save resources.
 
-- **Secret and Configuration Management**
+- **Secret and Configuration Management** \
   Kubernetes lets you store and manage sensitive information, such as OAuth tokens, database passwords, and SSH keys. You can deploy and update these secrets and application configuration separately from your container images. This means you do not need to rebuild your Docker images or expose secrets in your stack configuration just to change a database password.
 
-- **Storage Orchestration**
+- **Storage Orchestration** \
   Kubernetes allows you to automatically mount the storage system of your choice. Whether your containers need local storage, storage from a public cloud provider (like AWS or GCP), or a network storage system (like NFS), Kubernetes manages the lifecycle of that storage seamlessly.
 
 ## 2. Kubernetes Architecture
 
-### Cluster Architecture
+Kubernetes follows a classic distributed system architecture, which is split into two main parts:
 
-A Kubernetes cluster consists of two main types of resources:
+- **Control Plane** (the master/brain that manages the cluster)
+- **Worker Nodes** (the muscle where your actual applications run)
 
-**1. Control Plane (Master Node):** The brain of the cluster.
+<p align="center">
+  <img src="https://www.simform.com/wp-content/uploads/2023/08/Kubernetes-Architecture-Diagram.jpg" style="width:90%;" alt="K8s Architecture">
+</p>
 
-- **API Server:** The entry point for all REST commands (`kubectl` talks to this).
-- **Etcd:** A key-value store backing the cluster data (the "database" of K8s).
-- **Scheduler:** Assigns newly created pods to nodes.
-- **Controller Manager:** Handles background processes (e.g., detecting if a node goes down).
+### The Control Plane (Master Node)
 
-**2. Worker Nodes:** The machines (VMs or physical servers) where applications run.
+The **Control Plane** is responsible for maintaining the desired state of the cluster. It makes global decisions (like scheduling) and detects/responds to cluster events (like starting up a new container when one crashes). For high availability in production, the Control Plane components are usually replicated across multiple machines.
 
-- **Kubelet:** An agent that ensures containers are running in a Pod.
-- **Kube-proxy:** Maintains network rules on nodes.
-- **Container Runtime:** Software that runs containers (e.g., Docker, containerd).
+Here are the core components of the Control Plane:
 
-### Kubernetes Object Model
+- **API Server (`kube-apiserver`)**
+  - **What it is:** The front-end of the Kubernetes control plane. It exposes the Kubernetes API.
+  - **How it works:** Whenever you type a command using `kubectl` (or when a CI/CD pipeline interacts with the cluster), that request goes directly to the API Server. It validates the request, processes it, and updates the state of the cluster. It is the only component that communicates directly with the cluster's datastore (`etcd`).
+  - **Analogy:** Think of it as the central REST API gateway for the entire system. All other components, both internal and external, must talk to the API Server to get or set information.
+- **Etcd (`etcd`)**
+  - **What it is:** A consistent, highly available, distributed key-value store.
+  - **How it works:** This is the "database" of your Kubernetes cluster. It stores all the cluster data, including the current state, configuration details, and secrets. Because it is critical to the cluster's survival, it must be backed up regularly. If `etcd` goes down or loses data, the cluster loses its brain and forgets what applications are supposed to be running.
+- **Scheduler (`kube-scheduler`)**
+  - **What it is:** The component responsible for assigning work to the Worker Nodes.
+  - **How it works:** When you create a new deployment, the API Server registers that new Pods need to be created, but it doesn't know where to put them. The Scheduler constantly watches the API Server for newly created Pods that have no assigned Node. It then evaluates the resource requirements (CPU, RAM) of the Pod, checks the available capacity on all Worker Nodes, and assigns the Pod to the best-fitting Node.
+- **Controller Manager (`kube-controller-manager`)**
+  - **What it is:** A daemon that runs continuous control loops to regulate the state of the cluster.
+  - **How it works:** It constantly compares the actual state of the cluster against the desired state stored in `etcd`. It includes several specific controllers:
+    - **Node Controller:** Notices and responds when a worker node goes down.
+    - **ReplicaSet Controller:** Ensures that the correct number of Pods are running for a given deployment.
+    - **Endpoint Controller:** Populates Service network routes (joining Services and Pods).
 
-Everything in K8s is an object defined in YAML.
+### The Worker Nodes (Data Plane)
 
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-pod
-spec:
-  containers:
-    - name: nginx
-      image: nginx
-```
+**Worker Nodes** are the machines (VMs or physical servers) that execute the workloads. While the Control Plane manages the cluster, the Worker Nodes actually run your application containers (like a Java application, a database, or an Nginx server).
 
-|    Field     |    Meaning    |
-| :----------: | :-----------: |
-| `apiVersion` |   API group   |
-|    `kind`    |  Object type  |
-|  `metadata`  |  Object info  |
-|    `spec`    | Desired state |
+Every Worker Node runs the following components:
+
+- **Kubelet (`kubelet`)**
+  - **What it is:** The primary "agent" that runs on every single Worker Node.
+  - **How it works:** It communicates directly with the Master Node's API Server. The Kubelet receives instructions (Pod specifications) from the control plane and ensures that the containers described in those specs are actually running and healthy on its specific machine. If a container fails, the Kubelet tries to restart it.
+  - **Analogy:** It acts much like an agent in an automated pipeline system, receiving instructions from a master server and executing the local heavy lifting.
+- **Kube Proxy (`kube-proxy`)**
+  - **What it is:** A network proxy that runs on each node in your cluster.
+  - **How it works:** It maintains network rules on the host machine using operating system packet filtering (like `iptables` in Linux). These rules allow network communication to your Pods from network sessions inside or outside of your cluster. When a Service is created, `kube-proxy` ensures that traffic destined for that Service's IP is properly routed to the correct backend Pod.
+- **Container Runtime**
+  - **What it is:** The underlying software that is responsible for actually running the containers.
+  - **How it works:** Kubernetes doesn't run containers itself; it tells the Container Runtime to do it. While Docker used to be the default, Kubernetes now supports any runtime that implements the Kubernetes Container Runtime Interface (CRI), such as `containerd` or `CRI-O`.
 
 ## 3. Environment Setup
 
