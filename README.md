@@ -14,6 +14,11 @@
 4. [The Developer's Toolkit: Mastering `kubectl`](#4-the-developers-toolkit-mastering-kubectl)
 5. [Anatomy of a Kubernetes YAML Manifest](#5-anatomy-of-a-kubernetes-yaml-manifest)
 6. [Core Components](#6-core-components)
+   6.1. [Pod](#pod)
+   6.2. [ReplicaSet](#replicaset)
+   6.3. [Deployment](#deployment)
+   6.4. [Service](#service)
+   6.5. [Namespace](#namespace)
 7. [Configuration Management: ConfigMaps and Secrets](#7-configuration-management-configmaps-and-secrets)
 
 ## 1. Introduction to Kubernetes
@@ -428,11 +433,6 @@ spec:
 ### The Service `spec`
 
 A Service provides networking and load balancing.
-
-- `ClusterIP`: **(Default)** Exposes the Service on an internal IP. Only accessible within the cluster.
-- `NodePort`: Exposes the Service on each Node's IP at a static port (30000-32767). Accessible externally.
-- `LoadBalancer`: Exposes the Service externally using a cloud provider's Load Balancer (AWS ELB, GCP LB).
-- `ExternalName`: Connects to external services outside of Kubernetes using DNS.
 
 ```yaml
 spec:
@@ -897,6 +897,95 @@ spec:
 |     `kubectl get endpoints <name>` (`kubectl get ep`)     |                                Directly lists the actual IP addresses of the Pods that the Service is currently routing traffic to.                                |          `kubectl get ep my-backend-service`          |
 | `kubectl port-forward svc/<name> <local_port>:<svc_port>` |                Opens a secure network tunnel from your local machine to the Service. Excellent for quick local testing without Ingress or NodePort.                | `kubectl port-forward svc/my-backend-service 8080:80` |
 |                `kubectl delete svc <name>`                |                       Deletes the Service. (**Note:** This only removes network routing; it does **not** stop or delete the Pods behind it).                       |        `kubectl delete svc my-backend-service`        |
+
+### Namespace
+
+**1. What is a Namespace?**
+
+In Kubernetes, a **Namespace** provides a mechanism for isolating groups of resources within a single physical cluster. You can think of Namespaces as "virtual clusters" running on top of the same physical hardware.
+
+- **Analogy:** Think of a Namespace like a folder on your computer's operating system. You cannot have two files named `app-config.txt` in the same folder, but you can easily have them in two different folders. Similarly, you cannot have two Pods named `backend-api` in the same Namespace, but you can have one in the `dev` Namespace and one in the `prod` Namespace.
+
+**2. Why Use Namespaces? (Core Benefits)**
+
+If you are running a small, personal project (like your local Minikube setup), the `default` namespace is usually enough. However, in enterprise environments, Namespaces are critical:
+
+- **Environment Separation:** You can use the same cluster to host `development`, `staging`, and `production` environments by separating them into different Namespaces.
+- **Multi-Tenancy (Team Isolation):** If multiple teams share a cluster, giving each team their own Namespace prevents Team A from accidentally deleting or modifying Team B's applications.
+- **Resource Quotas:** You can apply memory and CPU limits to an entire Namespace. For example, you can ensure the `dev` Namespace cannot consume more than 20% of the cluster's total RAM, protecting the `prod` Namespace from resource starvation.
+- **Access Control (RBAC):** You can grant a user "Admin" rights strictly within the `dev` Namespace, but only "View" rights in the `prod` Namespace.
+
+**3. The Built-in Namespaces**
+
+When you first start a Kubernetes cluster, it automatically creates several standard Namespaces. You will see these when you run `kubectl get ns`:
+
+- `default`: The standard playground. If you deploy a Pod or Service without specifying a Namespace, it goes here.
+- `kube-system`: The most critical Namespace. This is where Kubernetes runs its own internal components (like the API Server, `etcd`, `kube-dns`, and network plugins). **Rule of thumb:** Never manually create or delete resources in this Namespace.
+- `kube-public`: A Namespace readable by all users (even unauthenticated ones), typically used for cluster bootstrap information.
+- `kube-node-lease`: Used by Kubernetes for node heartbeat data to determine if a Worker Node has failed.
+
+**4. Scoped vs. Cluster-Wide Resources**
+
+It is important to understand that most resources are tied to a Namespace, but not all.
+
+- **Namespaced Resources:** Pods, Deployments, ReplicaSets, Services, ConfigMaps, Secrets, PVCs (Persistent Volume Claims).
+- **Cluster-Scoped Resources**: Nodes, Persistent Volumes (PVs), StorageClasses, and Namespaces themselves. (You cannot put a Node inside a Namespace).
+
+**5. Cross-Namespace Communication (DNS Routing)**
+
+Resources can communicate across Namespaces! If a Frontend Pod in the `default` namespace wants to talk to a Database Service in the `prod` namespace, it cannot simply call `http://database-service`.
+It must use the **Fully Qualified Domain Name (FQDN)** provided by Kubernetes DNS:
+`http://<service-name>.<namespace-name>.svc.cluster.local` (Example: `http://database-service.prod.svc.cluster.local`)
+
+**6. YAML Specifications**
+
+- **Creating the Namespace (`namespace.yaml`)**
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging-env
+  labels:
+    team: backend-engineers
+```
+
+- **Deploying Resources INTO a Namespace:** To put a resource into a specific Namespace, you must explicitly declare it in the `metadata.namespace` field of that resource's YAML file. If you omit this, K8s puts it in `default`.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: library-api
+  namespace: staging-env # THIS puts the Deployment in the staging Namespace
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: library
+  template:
+    metadata:
+      labels:
+        app: library
+    spec:
+      containers:
+        - name: spring-boot
+          image: myrepo/library-api:v1.0
+```
+
+**7. Essential `kubectl` Commands for Namespaces**
+
+Working with Namespaces requires you to heavily use the `-n` (or `--namespace`) flag in `kubectl`. If you forget `-n`, `kubectl` will only look in the `default` namespace and might tell you "Resource not found".
+
+|                          Command                          |                                              Explanation & Use Case                                              |                          Example                           |
+| :-------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------: |
+|        `kubectl get namespaces` (`kubectl get ns`)        |               Lists all Namespaces in the cluster and their current status (Active / Terminating).               |                      `kubectl get ns`                      |
+|             `kubectl create namespace <name>`             |                        Imperatively creates a new Namespace without needing a YAML file.                         |                `kubectl create ns dev-env`                 |
+|       `kubectl apply -f <file.yaml> -n <namespace>`       | Deploys the resources in the YAML file directly into the specified Namespace (overriding the file if necessary). |           `kubectl apply -f app.yaml -n dev-env`           |
+|             `kubectl get pods -n <namespace>`             |                               Lists Pods strictly within the specified Namespace.                                |             `kubectl get pods -n kube-system`              |
+|         `kubectl get all -A` (`--all-namespaces`)         |   Lists **every resource across ALL Namespaces**. Extremely useful when debugging or locating lost resources.    |                    `kubectl get all -A`                    |
+|                `kubectl delete ns <name>`                 |    **DANGER:** Deletes the Namespace and **permanently destroys** every Pod, Service, and resource inside it.    |                `kubectl delete ns dev-env`                 |
+| `kubectl config set-context --current --namespace=<name>` |      **Pro Tip:** Sets a default Namespace for your current context so you don’t need to keep typing `-n`.       | `kubectl config set-context --current --namespace=dev-env` |
 
 ## 7. Configuration Management: ConfigMaps and Secrets
 
