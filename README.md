@@ -13,11 +13,7 @@
 3. [Environment Setup](#3-environment-setup)
 4. [The Developer's Toolkit: Mastering `kubectl`](#4-the-developers-toolkit-mastering-kubectl)
 5. [Anatomy of a Kubernetes YAML Manifest](#5-anatomy-of-a-kubernetes-yaml-manifest)
-6. [Core Concepts (The Foundation)](#4-core-concepts-the-foundation)
-7. [Workload Management (Controllers)](#5-workload-management-controllers)
-8. [Networking](#6-networking)
-9. [Configuration & Storage](#7-configuration--storage)
-10. [Advanced Concepts](#8-advanced-concepts)
+6. [Core Components](#6-core-components)
 
 ## 1. Introduction to Kubernetes
 
@@ -342,21 +338,21 @@ These are the most critical commands for troubleshooting when things go wrong.
 
 ### The 4 Universal Root Fields
 
-1. `apiVersion`: Which version of the Kubernetes API you're using to create this object.
+**1. `apiVersion`:** Which version of the Kubernetes API you're using to create this object.
 
 - **Examples:** `v1` (for Pods, Services, ConfigMaps), `apps/v1` (for Deployments, StatefulSets), `networking.k8s.io/v1` (for Ingress).
 
-2. `kind`: What kind of object you want to create.
+**2. `kind`:** What kind of object you want to create.
 
 - **Examples:** `Pod`, `Deployment`, `Service`, `Secret`, `Ingress`. (**Note:** Case-sensitive, always capitalized)
 
-3. `metadata`: Data that uniquely identifies the object.
+**3. `metadata`:** Data that uniquely identifies the object.
 
 - `name`: The **unique** name of the resource **(required)**.
 - `namespace`: Where it lives (defaults to `default`).
 - `labels`: Key-value pairs used to organize and select resources (e.g., `app: frontend`, `env: prod`). **Crucial for linking resources together.**
 
-4. `spec`: The actual specification or "meat" of the resource. This field dictates exactly what the resource should look like and how it behaves. The contents of `spec` are entirely dependent on the `kind`.
+**4. `spec`:** The actual specification or "meat" of the resource. This field dictates exactly what the resource should look like and how it behaves. The contents of `spec` are entirely dependent on the `kind`.
 
 ### The Pod `spec`
 
@@ -435,6 +431,7 @@ A Service provides networking and load balancing.
 - `ClusterIP`: **(Default)** Exposes the Service on an internal IP. Only accessible within the cluster.
 - `NodePort`: Exposes the Service on each Node's IP at a static port (30000-32767). Accessible externally.
 - `LoadBalancer`: Exposes the Service externally using a cloud provider's Load Balancer (AWS ELB, GCP LB).
+- `ExternalName`: Connects to external services outside of Kubernetes using DNS.
 
 ```yaml
 spec:
@@ -589,6 +586,108 @@ spec:
 - **Explanation:** The `tls` array specifies which `hosts` should be secured using which `secretName`.
   - When the Ingress controller reads this, it automatically configures itself to listen on port 443 (HTTPS) for `secure.example.com` and uses the provided certificate to encrypt the connection.
   - **Note:** You can combine all three of these! You can have an Ingress that uses TLS, has multiple Hosts, and uses Path-based routing under each Host.
+
+## 6. Core Components
+
+### Pod
+
+**1. What is a Pod?**
+
+In the Docker ecosystem, the smallest unit you deploy is a single container. However, Kubernetes does not run containers directly; it wraps one or more containers into a higher-level structure called a **Pod**.
+
+A Pod is the smallest, most basic, and deployable compute unit you can create and manage in Kubernetes.
+
+**2. The "Logical Host" Concept**
+
+You can think of a Pod as a tiny, isolated "logical host" (similar to a lightweight Virtual Machine or a WSL2 instance). When multiple containers are placed inside the same Pod, they behave as if they are running on the same physical machine.
+
+This means containers within the same Pod share:
+
+- **Network Namespace:** All containers in a Pod share the same IP address and port space. If you have a Java Spring Boot application container running on port 8080 and a logging container in the same Pod, they can communicate with each other using `localhost:8080`.
+- **Storage (Volumes):** Containers in the same Pod can mount the same shared storage volumes, allowing them to read and write to the exact same files simultaneously.
+- **IPC (Inter-Process Communication):** They can communicate using standard Linux IPC mechanisms (like shared memory).
+
+**3. Single-Container vs. Multi-Container Pods**
+
+- **One-Container-per-Pod (The Standard):** This is the most common use case. You have one container (e.g., a Spring Boot API) running inside one Pod. K8s manages the Pod, and the Pod manages the container.
+- **Multi-Container Pods (The Sidecar Pattern):** You put multiple containers in one Pod only if they are tightly coupled and must run together on the exact same server.
+  - **Example:** Your main container is a web server, and your second container is a "Sidecar" that pulls the latest configuration files from a Git repository every 5 minutes and saves them to a shared volume that the web server reads.
+
+**4. The Pod Lifecycle (Phases)**
+
+Pods are ephemeral (temporary). They are not designed to live forever. When a Pod is created, it goes through several phases:
+
+- **Pending:** The API Server accepted the Pod, but the Scheduler is still looking for a Worker Node to place it on, or the container image is currently downloading.
+- **Running:** The Pod has been bound to a Node, and all containers have been created. At least one container is running.
+- **Succeeded:** All containers in the Pod have terminated successfully (exit code 0) and will not be restarted. (Common for batch jobs).
+- **Failed:** All containers have terminated, but at least one failed (exited with a non-zero status, like an application crash).
+- **CrashLoopBackOff:** A very common state. It means a container repeatedly crashes immediately after starting, and Kubernetes is waiting longer and longer intervals before trying to restart it again.
+
+**5. Detailed Pod YAML Specification (`pod.yaml`)**
+
+Here is a comprehensive YAML example of a Pod running a Java application, detailing the most important `spec` configurations.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: library-api-pod # The unique name of the Pod
+  labels: # Used by Services and Deployments to find this Pod
+    app: library-system
+    tier: backend
+spec:
+  # [1. Containers Array] Defines what runs inside the Pod
+  containers:
+    - name: spring-boot-app # Name of the container
+      image: myrepo/library-api:v1.2.0 # The Docker image to pull
+      imagePullPolicy: IfNotPresent # Only pull if it's not cached locally
+
+      # [2. Ports] Documents which ports the container uses
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+
+      # [3. Environment Variables] Passed to the Linux OS inside the container
+      env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"
+        - name: DB_HOST
+          value: "postgres-service.default.svc.cluster.local"
+
+      # [4. Resources] CRITICAL for Java/Spring Boot apps to prevent OOM errors
+      resources:
+        requests: # The guaranteed minimum resources it needs to start
+          cpu: "500m" # 0.5 CPU cores
+          memory: "512Mi" # 512 Megabytes of RAM
+        limits: # The absolute maximum it is allowed to consume
+          cpu: "1000m" # 1 CPU core
+          memory: "1Gi" # 1 Gigabyte of RAM. If it exceeds this, K8s kills it.
+
+      # [5. Liveness and Readiness Probes] How K8s knows if your app is healthy
+      livenessProbe: # If this fails, K8s restarts the container
+        httpGet:
+          path: /actuator/health/liveness
+          port: 8080
+        initialDelaySeconds: 15 # Wait 15s before checking (gives Spring Boot time to start)
+        periodSeconds: 10 # Check every 10 seconds
+
+      readinessProbe: # If this fails, K8s stops sending network traffic to it
+        httpGet:
+          path: /actuator/health/readiness
+          port: 8080
+        initialDelaySeconds: 15
+```
+
+**6. Essential `kubectl` Commands for Pods**
+
+|              Command               |                                                                Explanation & Use Case                                                                 |                               Example                               |
+| :--------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------: |
+|    `kubectl apply -f pod.yaml`     |                                                        Creates the Pod based on the YAML file.                                                        |                 `kubectl apply -f backend-pod.yaml`                 |
+|         `kubectl get pods`         |                            Lists all Pods in the current namespace. Watch the `STATUS` column to see the lifecycle phases.                            | `kubectl get pods -w` (The `-w` flag watches for real-time changes) |
+|   `kubectl describe pod <name>`    | Fetches the complete metadata, configuration, and **Events** log of the Pod. Use this immediately if your Pod is in a **Pending** or **Error** state. |               `kubectl describe pod library-api-pod`                |
+|       `kubectl logs <name>`        |                           Prints the standard output/error (like Docker logs). Essential for debugging application crashes.                           |        `kubectl logs library-api-pod -f` (Streams the logs)         |
+| `kubectl exec -it <name> -- <cmd>` |       Opens an interactive shell session inside the running Linux container. Useful for checking configurations or running local network tests.       |           `kubectl exec -it library-api-pod -- /bin/bash`           |
+|    `kubectl delete pod <name>`     |                Destroys the Pod. (**Note:** If this Pod was created by a Deployment, a new one will instantly spin up to replace it).                 |                `kubectl delete pod library-api-pod`                 |
 
 ## 4. Core Concepts (The Foundation)
 
