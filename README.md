@@ -8,42 +8,72 @@
 
 ## Table of Contents
 
-- [1. Introduction to Kubernetes](#1-introduction-to-kubernetes)
-- [2. Kubernetes Architecture](#2-kubernetes-architecture)
-- [3. Environment Setup](#3-environment-setup)
-- [4. Core Concepts (The Foundation)](#4-core-concepts-the-foundation)
-- [5. Workload Management (Controllers)](#5-workload-management-controllers)
-- [6. Networking](#6-networking)
+1. [Introduction to Kubernetes](#1-introduction-to-kubernetes)
+2. [Kubernetes Architecture](#2-kubernetes-architecture)
+3. [Environment Setup](#3-environment-setup)
+4. [Core Concepts (The Foundation)](#4-core-concepts-the-foundation)
+5. [Workload Management (Controllers)](#5-workload-management-controllers)
+6. [Networking](#6-networking)
+7. [Configuration & Storage](#7-configuration--storage)
+8. [Advanced Concepts](#8-advanced-concepts)
 
 ## 1. Introduction to Kubernetes
 
 ### What is Kubernetes?
 
-**Kubernetes (K8s)** is an open-source **container orchestration system** used to:
+**Kubernetes** (often abbreviated as **K8s**) is a powerful, open-source **container orchestration platform**. Originally developed by Google and now maintained by the Cloud Native Computing Foundation (CNCF).
 
-- Deploy containerized applications
-- Scale them automatically
-- Manage networking
-- Handle self-healing
-- Perform rolling updates
+It is designed to automate:
 
-Originally developed by Google and now maintained by Cloud Native Computing Foundation (CNCF).
+- Deployment of containerized applications
+- Scaling applications
+- Managing container networking
+- Self-healing
+- Rolling updates and rollbacks
 
-### Why Kubernetes?
+### Understanding "Container Orchestration"
 
-**Before Kubernetes:**
+To understand Kubernetes, you first need to understand the problem it solves. Packaging an application (like a Java Spring Boot backend) into a Docker container makes it easy to run on a single machine. However, when you move to a production environment, managing these containers becomes incredibly complex.
 
-- We used containers (e.g., Docker)
-- But managing many containers across multiple servers was hard
+If you have an application that requires 50 running containers across 10 different servers, you face several challenges:
 
-**Kubernetes solves:**
+- How do you ensure they communicate securely?
+- What happens if one of the servers crashes?
+- How do you update the application to a new version without taking the system offline?
 
-- High availability
-- Auto-scaling
-- Rolling deployment
-- Service discovery
-- Load balancing
-- Secret management
+Kubernetes acts as the **"orchestrator"** or the brain that manages this entire distributed system. You declare the desired state of your system (e.g., "I want 3 instances of my web application running at all times"), and Kubernetes constantly monitors the environment to ensure the actual state matches your desired state.
+
+Therefore, container orchestration means:
+
+- Scheduling containers on nodes
+- Restarting them if they crash
+- Replacing them if node fails
+- Scaling them up/down
+- Managing communication between them
+
+Kubernetes does orchestration at cluster scale.
+
+### Key Benefits of Kubernetes
+
+Kubernetes is the industry standard for cloud-native applications because it provides a robust set of features out of the box.
+
+- **Automated Rollouts and Rollbacks**
+  Kubernetes allows you to describe the desired state for your deployed containers. When integrated with CI/CD tools like Jenkins, you can automate the process of rolling out new code. If you deploy a new version of your application, Kubernetes will progressively update the containers one by one to ensure zero downtime. If the new version fails or has a bug, Kubernetes can automatically roll back to the previous, stable version.
+
+- **Self-Healing Capabilities**
+  Kubernetes constantly monitors the health of your nodes and containers. If a container crashes, Kubernetes automatically restarts it. If a worker node fails entirely, Kubernetes will reschedule the containers that were running on that node to other healthy nodes in the cluster. It also kills containers that do not respond to your user-defined health checks and does not route traffic to them until they are ready to serve requests.
+
+- **Service Discovery and Load Balancing**
+  Containers are ephemeral; they are created and destroyed frequently, meaning their IP addresses constantly change. Kubernetes solves this by giving containers their own IP addresses and a single DNS name for a set of containers. It can also distribute network traffic (load balancing) across these containers so that the deployment is stable, without requiring you to modify your application code.
+
+- **Horizontal Scaling**
+  You can scale your application up and down quickly and easily. This can be done manually via a simple command or a UI, or automatically based on CPU usage, memory consumption, or even custom metrics. During a traffic spike, Kubernetes can rapidly spin up new container instances to handle the load and then terminate them when the traffic subsides to save resources.
+
+- **Secret and Configuration Management**
+  Kubernetes lets you store and manage sensitive information, such as OAuth tokens, database passwords, and SSH keys. You can deploy and update these secrets and application configuration separately from your container images. This means you do not need to rebuild your Docker images or expose secrets in your stack configuration just to change a database password.
+
+- **Storage Orchestration**
+  Kubernetes allows you to automatically mount the storage system of your choice. Whether your containers need local storage, storage from a public cloud provider (like AWS or GCP), or a network storage system (like NFS), Kubernetes manages the lifecycle of that storage seamlessly.
 
 ## 2. Kubernetes Architecture
 
@@ -250,7 +280,98 @@ spec:
       nodePort: 30007 # (Optional) Specific port for external access
 ```
 
+## 7. Configuration & Storage
+
+Separating configuration from container images is a best practice (The 12-Factor App).
+
+### ConfigMaps & Secrets
+
+- **ConfigMap:** Stores non-sensitive data (config files, environment variables).
+- **Secret:** Stores sensitive data (passwords, keys) encoded in Base64.
+
+**Example: Creating a Secret (CLI method)**
+
+```bash
+# Create a secret named "db-pass"
+kubectl create secret generic db-pass --from-literal=password="MySuperSecretPass"
+
+# Verify
+kubectl get secrets
+```
+
+### Persistent Volumes (PV) & Persistent Volume Claims (PVC)
+
+Containers are ephemeral; when they restart, file system data is lost. PV/PVC provides permanent storage.
+
+- **PV:** A piece of storage in the cluster (Physical Hard Drive, AWS EBS).
+- **PVC:** A request for storage by a user (e.g., "I need 5GB").
+
+**Flow:** Pod requests -> PVC -> binds to -> PV.
+
+## 8. Advanced Concepts
+
+### Ingress
+
+**Definition:** An API object that manages external access to the services in a cluster, typically HTTP/HTTPS. It acts as a smart router/reverse proxy (like Nginx) sitting in front of your Services.
+
+**Why use it?** Instead of using 10 LoadBalancers for 10 Services (expensive), you use 1 Ingress Controller to route traffic based on domains (e.g., `api.example.com` -> Service A, `web.example.com` -> Service B).
+
+**Setup (Minikube):**
+
+```bash
+# Enable NGINX Ingress controller in Minikube
+minikube addons enable ingress
+```
+
+**YAML Structure (`ingress.yaml`):**
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+spec:
+  rules:
+    - host: myapp.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-service
+                port:
+                  number: 80
+```
+
+### Helm (The Package Manager)
+
+**Concept:** Helm is like `apt` or `yum` or `maven` but for Kubernetes. It helps you install complex applications (like Prometheus, Jenkins, MySQL) with a single command.
+
+**Install Helm:**
+
+```bash
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+**Common Commands:**
+
+```bash
+# Add a repository (e.g., Bitnami)
+helm repo add bitnami https://charts.bitnami.com/bitnami
+
+# Search for a chart
+helm search repo mysql
+
+# Install a chart
+helm install my-db bitnami/mysql
+
+# List releases
+helm list
+```
+
 ## References
 
-- [Kubernetes](https://www.youtube.com/watch?v=X48VuDVv0do)
-- [ArgoCD](https://www.youtube.com/watch?v=MeU5_k9ssrs)
+- [Kubernetes in a Nutshell](https://medium.com/swlh/kubernetes-in-a-nutshell-tutorial-for-beginners-caa442dfd6c0)
+- [Kubernetes Course](https://www.youtube.com/watch?v=X48VuDVv0do)
+- [ArgoCD Course](https://www.youtube.com/watch?v=MeU5_k9ssrs)
