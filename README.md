@@ -11,11 +11,13 @@
 1. [Introduction to Kubernetes](#1-introduction-to-kubernetes)
 2. [Kubernetes Architecture](#2-kubernetes-architecture)
 3. [Environment Setup](#3-environment-setup)
-4. [Core Concepts (The Foundation)](#4-core-concepts-the-foundation)
-5. [Workload Management (Controllers)](#5-workload-management-controllers)
-6. [Networking](#6-networking)
-7. [Configuration & Storage](#7-configuration--storage)
-8. [Advanced Concepts](#8-advanced-concepts)
+4. [The Developer's Toolkit: Mastering `kubectl`](#4-the-developers-toolkit-mastering-kubectl)
+5. [Anatomy of a Kubernetes YAML Manifest](#5-anatomy-of-a-kubernetes-yaml-manifest)
+6. [Core Concepts (The Foundation)](#4-core-concepts-the-foundation)
+7. [Workload Management (Controllers)](#5-workload-management-controllers)
+8. [Networking](#6-networking)
+9. [Configuration & Storage](#7-configuration--storage)
+10. [Advanced Concepts](#8-advanced-concepts)
 
 ## 1. Introduction to Kubernetes
 
@@ -185,6 +187,158 @@ kubectl get nodes
   - `minikube dashboard`: Kubernetes comes with a built-in web UI. This command enables the dashboard add-on and opens it in your default web browser, giving you a visual representation of your cluster.
   - `minikube stop`: Safely shuts down the local cluster without deleting your deployed resources.
   - `minikube delete`: Completely destroys the cluster and wipes all data.
+
+## 4. The Developer's Toolkit: Mastering `kubectl`
+
+[Kubernetes Cheatsheet](https://phoenixnap.com/kb/wp-content/uploads/2021/11/kubectl-commands-cheat-sheet-by-pnap.pdf)
+
+`kubectl` is your primary interface with the Kubernetes Control Plane. It operates in two main ways:
+
+1. **Imperative:** Telling K8s exactly what to do step-by-step (e.g., "Create a pod named X with image Y"). Good for quick tests.
+2. **Declarative:** Telling K8s what you want the end result to be using YAML files (e.g., "Make the cluster look like this file"). This is the industry standard for production.
+
+Below is a comprehensive guide to the commands you will use daily, categorized by their function.
+
+### Command Structure
+
+**General Syntax:**
+
+```bash
+kubectl <verb> <resource> <name> <flags>
+```
+
+|    Part    |       Meaning       |
+| :--------: | :-----------------: |
+|   `verb`   |       Action        |
+| `resource` |     Object type     |
+|   `name`   |   Specific object   |
+|  `flags`   | Additional behavior |
+
+**Resource Types:**
+
+|        Short         |         Full          |
+| :------------------: | :-------------------: |
+|         `po`         |          pod          |
+|         `no`         |         node          |
+|       `deploy`       |      deployment       |
+|        `svc`         |        service        |
+|         `rs`         |      replicaset       |
+|         `ds`         |       daemonset       |
+|         `ns`         |       namespace       |
+|         `cm`         |       configmap       |
+|         `ep`         |       endpoints       |
+|       `secret`       |        secret         |
+|        `pvc`         | persistentvolumeclaim |
+|         `pv`         |   persistentvolume    |
+|        `ing`         |        ingress        |
+|        `sts`         |      statefulset      |
+|         `cj`         |        cronjob        |
+|        `job`         |          job          |
+|         `sa`         |    serviceaccount     |
+|        `role`        |         role          |
+|    `rolebinding`     |      rolebinding      |
+|    `clusterrole`     |      clusterrole      |
+| `clusterrolebinding` |  clusterrolebinding   |
+
+List all supported resources:
+
+```bash
+kubectl api-resources
+```
+
+**Core `kubectl` Verbs (Commands):**
+
+|      Verb      |                                                Purpose                                                |
+| :------------: | :---------------------------------------------------------------------------------------------------: |
+|     `get`      |       Retrieve a list or basic information about resources (pods, services, deployments, etc.)        |
+|   `describe`   | Show detailed information about a resource, including status and events (commonly used for debugging) |
+|    `create`    |            Create a resource imperatively (execute immediately, rarely used in production)            |
+|    `apply`     |       Create or update resources declaratively from a YAML file (standard for CI/CD workflows)        |
+|   `explain`    |                       Display documentation for a resource and its YAML fields                        |
+|    `delete`    |                                  Remove a resource from the cluster                                   |
+|     `edit`     |                           Edit a live resource directly using a text editor                           |
+|    `scale`     |                      Increase or decrease the number of replicas for a workload                       |
+|     `set`      |   Update specific parts of a resource configuration (image, environment variables, resources, etc.)   |
+|   `rollout`    |                   Manage deployment rollouts (check status, view history, rollback)                   |
+|     `logs`     |                              View logs from a container running in a pod                              |
+|     `exec`     |                             Execute a command inside a running container                              |
+|    `config`    |                        Manage kubeconfig settings (clusters, contexts, users)                         |
+|     `auth`     |                               Check authorization and RBAC permissions                                |
+| `port-forward` |             Forward a pod or service port to your local machine for testing and debugging             |
+
+**Global Flags:**
+
+|           Flag           |                                   Meaning                                    |
+| :----------------------: | :--------------------------------------------------------------------------: |
+|   `-n`, `--namespace`    |                 Specify the namespace to run the command in                  |
+| `-A`, `--all-namespaces` |                  Run the command across **all namespaces**                   |
+|     `-o`, `--output`     |         Control output format (e.g. `yaml`, `json`, `wide`, `name`)          |
+|    `--dry-run=client`    | Simulate the command locally without actually creating or changing resources |
+|     `--watch`, `-w`      |            Continuously watch resources for changes in real time             |
+|       `--context`        |              Use a specific Kubernetes context from kubeconfig               |
+|      `--kubeconfig`      |           Specify a custom kubeconfig file instead of the default            |
+|    `--field-selector`    |      Filter resources by specific fields (e.g. `status.phase=Running`)       |
+|    `-l`, `--selector`    |                    Filter resources using label selectors                    |
+|       `--sort-by`        |                       Sort output by a specific field                        |
+|     `--show-labels`      |                         Display labels in the output                         |
+|         `--all`          |    Apply the command to **all resources of a given type** in a namespace     |
+|        `--force`         |          Force resource deletion (can cause immediate termination)           |
+|     `--grace-period`     |     Set how long Kubernetes waits before forcefully deleting a resource      |
+|       `--timeout`        |             Set how long the command should wait before failing              |
+|   `--request-timeout`    |      Set timeout for a single API request to the Kubernetes API server       |
+|      `--v=<level>`       |            Set log verbosity level for debugging `kubectl` itself            |
+|          `--as`          |               Impersonate another user (used for RBAC testing)               |
+|       `--as-group`       |                   Impersonate a user group (RBAC testing)                    |
+
+### Cluster Management & Context
+
+|               Command               |                                  Meaning                                   |                            When to Use                             |                Example                |
+| :---------------------------------: | :------------------------------------------------------------------------: | :----------------------------------------------------------------: | :-----------------------------------: |
+|       `kubectl cluster-info`        |       Displays the addresses of the control plane and core services        |       To verify cluster connectivity and API server address        |        `kubectl cluster-info`         |
+|    `kubectl config get-contexts`    | Lists all available cluster contexts (environments) in your `.kube/config` | When managing multiple clusters (e.g. Minikube, AWS Prod, GCP Dev) |     `kubectl config get-contexts`     |
+| `kubectl config use-context <name>` |             Switches the active context to a different cluster             |     When switching from Dev to Prod (or between environments)      | `kubectl config use-context minikube` |
+
+### Creating & Applying Resources
+
+|               Command                |                                     Meaning                                      |                         When to Use                          |                   Example                   |
+| :----------------------------------: | :------------------------------------------------------------------------------: | :----------------------------------------------------------: | :-----------------------------------------: |
+|    `kubectl apply -f <file.yaml>`    |      **(Declarative)** Creates or updates resources defined in a YAML file       | Primary deployment command for managing Kubernetes resources |     `kubectl apply -f deployment.yaml`      |
+|   `kubectl apply -f <directory>/`    |                 Applies all YAML files in a specified directory                  |          Deploy an entire application stack at once          |   `kubectl apply -f ./my-app-manifests/`    |
+| `kubectl run <name> --image=<image>` |          **(Imperative)** Creates a single Pod running a specific image          |      Quick debugging, image testing, or temporary tasks      | `kubectl run test-pod --image=nginx:alpine` |
+|  `kubectl create <resource> <name>`  | **(Imperative)** Creates a specific resource (e.g. namespace, secret, configmap) | Quickly generate simple resources without writing full YAML  |     `kubectl create namespace prod-env`     |
+
+### Viewing & Finding Resources (`get`)
+
+The `get` command lists resources. You can append `-n <namespace>` to any of these to look outside the default namespace, or `-A` for all namespaces.
+
+|             Command              |                                   Meaning                                    |                                                      When to Use                                                       |               Example               |
+| :------------------------------: | :--------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :---------------------------------: |
+|        `kubectl get pods`        |                   Lists all Pods in the current namespace                    | Check whether applications are running, starting, or failing (e.g. `Running`, `ContainerCreating`, `CrashLoopBackOff`) |         `kubectl get pods`          |
+| `kubectl get <resource> -o wide` | Lists resources with additional details (node assignment, internal IP, etc.) |                             See where a pod is running and its network-related information                             |     `kubectl get pods -o wide`      |
+| `kubectl get <resource> -o yaml` |                Outputs the full YAML definition of a resource                |        Back up a resource or inspect how Kubernetes modified your configuration (default values, status fields)        | `kubectl get deploy my-app -o yaml` |
+|        `kubectl get all`         | Lists common resources such as Pods, Services, Deployments, and ReplicaSets  |                               Get a quick overview of everything running in a namespace                                |      `kubectl get all -n dev`       |
+
+### Inspecting & Debugging (`describe`, `logs`, `exec`)
+
+These are the most critical commands for troubleshooting when things go wrong.
+
+|                Command                 |                                         Meaning                                          |                                                                 When to Use                                                                 |                    Example                     |
+| :------------------------------------: | :--------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------: |
+|  `kubectl describe <resource> <name>`  | Shows detailed, human-readable information about a resource, including recent **Events** | When a Pod fails to start or behaves unexpectedly; the **Events** section explains the reason (e.g. `ImagePullBackOff`, `Insufficient CPU`) |      `kubectl describe pod my-nginx-pod`       |
+|       `kubectl logs <pod-name>`        |            Prints the standard output (stdout/stderr) of a container in a Pod            |                                           Read application logs, stack traces, or crash messages                                            |         `kubectl logs my-backend-pod`          |
+|      `kubectl logs -f <pod-name>`      |                     Streams logs in real time (similar to `tail -f`)                     |                                               Monitor live traffic or debug a running process                                               |        `kubectl logs -f my-backend-pod`        |
+| `kubectl exec -it <pod-name> -- <cmd>` |      Executes a command inside a running container; `-it` enables interactive mode       |                  Open a shell to inspect files, test network connectivity (`curl`, `ping`), or check environment variables                  | `kubectl exec -it db-pod -- /bin/bash` or `sh` |
+
+### Modifying & Deleting
+
+|                      Command                       |                                 Meaning                                  |                                             When to Use                                              |                   Example                   |
+| :------------------------------------------------: | :----------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------: | :-----------------------------------------: |
+|          `kubectl edit <resource> <name>`          | Opens the live resource in your default terminal editor (e.g. Vim, Nano) |       Quick, temporary fixes or tests _(changes may be overwritten by future `kubectl apply`)_       |        `kubectl edit service my-svc`        |
+| `kubectl scale deployment <name> --replicas=<num>` |     Immediately changes the number of running Pods for a Deployment      |                         Handle traffic spikes or scale down to reduce costs                          | `kubectl scale deploy web-app --replicas=5` |
+|          `kubectl delete -f <file.yaml>`           |         Deletes all resources defined in the specified YAML file         |                 Completely remove an application stack that was previously deployed                  |     `kubectl delete -f deployment.yaml`     |
+|         `kubectl delete <resource> <name>`         |                 Imperatively deletes a specific resource                 | Remove a stuck Pod (will be recreated if managed by a Deployment) or delete a resource like a Secret |       `kubectl delete pod faulty-pod`       |
+
+## 5. Anatomy of a Kubernetes YAML Manifest
 
 ## 4. Core Concepts (The Foundation)
 
