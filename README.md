@@ -24,6 +24,7 @@
 9. [Ingress: The Smart Router (Layer 7 Load Balancing)](#9-ingress-the-smart-router-layer-7-load-balancing)
 10. [Helm (The Package Manager)](#10-helm-the-package-manager)
 11. [StatefulSets: Managing Stateful Applications](#11-statefulsets-managing-stateful-applications)
+12. [Security: Role-Based Access Control (RBAC)](#12-security-role-based-access-control-rbac)
 
 ## 1. Introduction to Kubernetes
 
@@ -213,13 +214,6 @@ Below is a comprehensive guide to the commands you will use daily, categorized b
 kubectl <verb> <resource> <name> <flags>
 ```
 
-|    Part    |       Meaning       |
-| :--------: | :-----------------: |
-|   `verb`   |       Action        |
-| `resource` |     Object type     |
-|   `name`   |   Specific object   |
-|  `flags`   | Additional behavior |
-
 **Resource Types:**
 
 |        Short         |         Full          |
@@ -282,17 +276,12 @@ kubectl api-resources
 |    `--dry-run=client`    | Simulate the command locally without actually creating or changing resources |
 |     `--watch`, `-w`      |            Continuously watch resources for changes in real time             |
 |       `--context`        |              Use a specific Kubernetes context from kubeconfig               |
-|      `--kubeconfig`      |           Specify a custom kubeconfig file instead of the default            |
 |    `--field-selector`    |      Filter resources by specific fields (e.g. `status.phase=Running`)       |
 |    `-l`, `--selector`    |                    Filter resources using label selectors                    |
 |       `--sort-by`        |                       Sort output by a specific field                        |
 |     `--show-labels`      |                         Display labels in the output                         |
 |         `--all`          |    Apply the command to **all resources of a given type** in a namespace     |
 |        `--force`         |          Force resource deletion (can cause immediate termination)           |
-|     `--grace-period`     |     Set how long Kubernetes waits before forcefully deleting a resource      |
-|       `--timeout`        |             Set how long the command should wait before failing              |
-|   `--request-timeout`    |      Set timeout for a single API request to the Kubernetes API server       |
-|      `--v=<level>`       |            Set log verbosity level for debugging `kubectl` itself            |
 |          `--as`          |               Impersonate another user (used for RBAC testing)               |
 |       `--as-group`       |                   Impersonate a user group (RBAC testing)                    |
 
@@ -1100,7 +1089,7 @@ To make the rules work, you must have an **Ingress Controller** running in your 
 
 ### Key Capabilities of Ingress
 
-1. **Path-Based Routing (Simple Fanout)**
+**1. Path-Based Routing (Simple Fanout)**
 
 **Concept:** Path-based routing (also known as a simple fanout) allows you to route traffic from a single IP address and a single domain name to multiple backend Services based on the HTTP URI (the path after the domain).
 
@@ -1143,7 +1132,7 @@ spec:
 
 - **Explanation:** The Ingress controller evaluates the paths in order. Because `pathType` is set to `Prefix`, a request to `myapp.example.com/api/v1/users` will match the `/api` rule and be forwarded to the `backend-api-service` on port `8080`.
 
-2. **Host-Based Routing (Name-Based Virtual Hosting)**
+**2. Host-Based Routing (Name-Based Virtual Hosting)**
 
 **Concept:** Host-based routing supports routing HTTP traffic to multiple hostnames (domains or subdomains) using the same Ingress IP address. The Ingress controller inspects the HTTP `Host` header of the incoming request to determine which backend Service should receive it.
 
@@ -1186,7 +1175,7 @@ spec:
 
 - **Explanation:** In this `spec`, there are two separate items in the `rules` array, each defining a different `host`. If a user types `api.example.com` into their browser, the DNS resolves to the Ingress controller's IP. The controller sees the `Host: api.example.com` header and routes the traffic exclusively to the `api-service`.
 
-3. **TLS (HTTPS Setup)**
+**3. TLS (HTTPS Setup)**
 
 **Concept:** By default, Ingress traffic is unencrypted (HTTP). You can secure an Ingress by specifying a `tls` section containing a Secret that holds a TLS private key and certificate. This enables "TLS Termination" at the Ingress controller - meaning the external connection is encrypted (HTTPS), but the internal traffic between the controller and your Pods is usually plain HTTP, saving processing power on your application containers.
 
@@ -1455,6 +1444,145 @@ Once deployed, other applications in the cluster can reach specific database nod
 |               `kubectl get pvc`                |          Views the automatically generated PVCs (e.g. `mysql-data-mysql-db-0`, `mysql-data-mysql-db-1`, …).          |             `kubectl get pvc`             |
 |  `kubectl scale sts <name> --replicas=<num>`   |                   Scales the StatefulSet. **Scaling down deletes the highest-numbered Pod first.**                   | `kubectl scale sts mysql-db --replicas=5` |
 |          `kubectl delete sts <name>`           | Deletes the StatefulSet. **Important:** PVCs are **NOT** deleted automatically — this prevents accidental data loss. |       `kubectl delete sts mysql-db`       |
+
+## 12. Security: Role-Based Access Control (RBAC)
+
+### What is RBAC in Kubernetes?
+
+By default, when you interact with a Kubernetes cluster using `kubectl`, you are likely using the `admin` credentials provided by Minikube or your cloud provider. This gives you absolute power to create, read, modify, or delete anything in the cluster.
+
+In a real-world scenario, handing out cluster-admin access to every developer, CI/CD pipeline, and external tool is a massive security risk. **Role-Based Access Control (RBAC)** is the Kubernetes system that allows you to regulate exactly who can do what within the cluster, following the **Principle of Least Privilege**.
+
+### The Three Pillars of RBAC
+
+To understand RBAC, you only need to answer three questions:
+
+1. **Who** is making the request? (_Subject_)
+2. **What** permissions do they have? (_Role_)
+3. **How** are they granted those permissions? (_RoleBinding_)
+
+**Pillar 1: The Subjects (The "Who")**
+
+A Subject is the entity trying to interact with the Kubernetes API. There are three types:
+
+- **User Accounts:** Actual humans (e.g., `alice@company.com`). K8s does not manage users internally; it relies on external Identity Providers (like AWS IAM, Google OIDC, or Active Directory).
+- **Groups:** A collection of users (e.g., `backend-developers`).
+- **ServiceAccounts:** This is the most important concept for developers! A ServiceAccount is an identity created specifically for **applications and Pods** running inside the cluster. If your CI/CD pipeline or an ArgoCD agent needs to deploy an application, it uses a ServiceAccount.
+
+**Pillar 2: Roles and ClusterRoles (The "What" / The Rules)**
+
+A Role defines a set of rules representing a set of permissions. It dictates what Actions (Verbs) can be performed on what Objects (Resources).
+
+- **Role (Namespace-Scoped):** Grants permissions only within a specific Namespace. (e.g., "Can read Pods in the `dev` namespace").
+- **ClusterRole (Cluster-Scoped):** Grants permissions across the entire cluster, or to cluster-level resources like Nodes and PersistentVolumes.
+
+**The Rules Mapping:**
+
+- **Verbs (Actions):** `get`, `list`, `watch`, `create`, `update`, `patch`, `delete`.
+- **Resources (Objects):** `pods`, `deployments`, `services`, `secrets`, etc.
+
+**Pillar 3: RoleBindings and ClusterRoleBindings (The "How" / The Link)**
+
+A Role is just a list of rules; it does nothing on its own. A **Binding** is what attaches a Role (the rules) to a Subject (the user or ServiceAccount).
+
+- **RoleBinding:** Binds a Role (or ClusterRole) to a Subject within a specific Namespace.
+- **ClusterRoleBinding:** Binds a ClusterRole to a Subject across the entire cluster.
+
+### YAML Specifications (A Practical Example)
+
+Let's say you are building a Library Management System. You want to create a dedicated CI/CD pipeline that has permission to deploy and update the Spring Boot backend, but only within the `library-dev` namespace. It should not be able to delete databases or touch the `production` namespace.
+
+**Step 1: Create the ServiceAccount (`service-account.yaml`)**
+
+This is the identity your CI/CD pipeline will use.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: library-ci-pipeline
+  namespace: library-dev
+```
+
+**Step 2: Create the Role (`role.yaml`)**
+
+Here we define the exact permissions. Notice how we restrict the verbs and resources.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: library-developer-role
+  namespace: library-dev
+rules:
+  # Rule 1: Can view, create, and update Deployments and StatefulSets
+  - apiGroups: ["apps"] # The API group the resources belong to
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Rule 2: Can view and create Pods and Services, but CANNOT delete them
+  - apiGroups: [""] # The core API group is represented by an empty string
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch", "create"]
+
+  # Rule 3: STRICT RESTRICTION - Can only view Secrets, cannot create or modify them
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+```
+
+**Step 3: Create the RoleBinding (`role-binding.yaml`)**
+
+This links the `library-ci-pipeline` ServiceAccount to the `library-developer-role`.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: library-ci-binding
+  namespace: library-dev
+subjects:
+  # The "Who"
+  - kind: ServiceAccount
+    name: library-ci-pipeline
+    namespace: library-dev
+roleRef:
+  # The "What"
+  kind: Role
+  name: library-developer-role
+  apiGroup: rbac.authorization.k8s.io
+```
+
+### Assigning a ServiceAccount to a Pod
+
+If you have a Pod that needs to talk to the Kubernetes API (for example, if you wrote a custom application that needs to list other Pods), you must inject the ServiceAccount into the Pod's `spec`. If you don't, K8s assigns the highly restricted `default` ServiceAccount.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: internal-monitor-app
+  namespace: library-dev
+spec:
+  replicas: 1
+  template:
+    spec:
+      serviceAccountName: library-ci-pipeline # Injects the RBAC permissions into this Pod
+      containers:
+        - name: monitor
+          image: myrepo/monitor:v1
+```
+
+### Essential `kubectl` Commands for RBAC (The Auth Tool)
+
+Kubernetes provides an incredibly useful built-in tool called `auth can-i` to test permissions without having to actually run the commands and risk breaking things.
+
+|                                       Command                                        |                                 Explanation & Use Case                                  |                                                        Example                                                        |
+| :----------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------: |
+|                        `kubectl auth can-i <verb> <resource>`                        |        Tests whether your **current user** has permission to perform an action.         |                   `kubectl auth can-i create deployments -n library-dev` _(returns `yes` or `no`)_                    |
+| `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<namespace>:<name>` | **Crucial for testing:** Impersonates a ServiceAccount to verify its exact permissions. | `kubectl auth can-i delete secrets --as=system:serviceaccount:library-dev:library-ci-pipeline` _(should return `no`)_ |
+|                   `kubectl get roles,rolebindings -n <namespace>`                    |            Lists all **Roles** and **RoleBindings** in a specific namespace.            |                                    `kubectl get roles,rolebindings -n library-dev`                                    |
+|                    `kubectl describe role <name> -n <namespace>`                     |      Displays the actual RBAC rules (**verbs & resources**) defined inside a Role.      |                             `kubectl describe role library-developer-role -n library-dev`                             |
 
 ## References
 
