@@ -26,6 +26,13 @@
 11. [StatefulSets: Managing Stateful Applications](#11-statefulsets-managing-stateful-applications)
 12. [Security: Role-Based Access Control (RBAC)](#12-security-role-based-access-control-rbac)
 13. [ArgoCD & GitOps: The Modern Deployment Standard](#13-argocd--gitops-the-modern-deployment-standard)
+14. [End-to-End CI/CD Pipeline: Jenkins, DevSecOps & ArgoCD (GitOps)](#14-end-to-end-cicd-pipeline-jenkins-devsecops--argocd-gitops)
+
+## References
+
+- [Kubernetes in a Nutshell](https://medium.com/swlh/kubernetes-in-a-nutshell-tutorial-for-beginners-caa442dfd6c0)
+- [Kubernetes Course](https://www.youtube.com/watch?v=X48VuDVv0do)
+- [ArgoCD Course](https://www.youtube.com/watch?v=MeU5_k9ssrs)
 
 ## 1. Introduction to Kubernetes
 
@@ -1711,8 +1718,244 @@ While the Web UI is fantastic for visualizing your deployments, ArgoCD also has 
 | `argocd app sync my-library-app` |       Manually triggers a synchronization, forcing ArgoCD to pull the latest state from Git immediately.        |
 | `argocd app diff my-library-app` | Shows the exact differences between the Git repository and the live Kubernetes cluster (similar to `git diff`). |
 
-## References
+## 14. End-to-End CI/CD Pipeline: Jenkins, DevSecOps & ArgoCD (GitOps)
 
-- [Kubernetes in a Nutshell](https://medium.com/swlh/kubernetes-in-a-nutshell-tutorial-for-beginners-caa442dfd6c0)
-- [Kubernetes Course](https://www.youtube.com/watch?v=X48VuDVv0do)
-- [ArgoCD Course](https://www.youtube.com/watch?v=MeU5_k9ssrs)
+To build a modern, secure, and fully automated CI/CD pipeline, we will apply the **Repository Separation** pattern. This is a fundamental best practice in GitOps:
+
+1. **App Repository:** Contains your application source code (e.g., Java Spring Boot), `Dockerfile`, and the `Jenkinsfile`.
+2. **GitOps Repository:** Strictly contains only the Kubernetes YAML configuration files (Deployment, Service, Ingress, etc.).
+
+### The Big Picture (Architecture Flow)
+
+Here is the exact lifecycle of a code change, from the developer's laptop to running in the Kubernetes cluster:
+
+**1. Commit Code:** A developer pushes a code update to the **App Repo**.
+
+**2. Trigger CI:** Jenkins detects the change and triggers the Pipeline (`Jenkinsfile`).
+
+**3. Security Checks (Shift-Left):**
+
+- **Gitleaks:** Scans the repository to ensure no hardcoded secrets, API keys, or tokens are accidentally committed.
+
+**4. Build & Test:** Jenkins compiles the application code and runs unit tests to ensure business logic is not broken.
+
+**5. Quality & Vulnerability Checks (DevSecOps):**
+
+- **SonarQube:** Analyzes the code for bugs, code smells, and static vulnerabilities (SAST).
+- **Snyk:** Scans third-party open-source dependencies (e.g., Maven `pom.xml` libraries) for known security flaws (SCA).
+
+**6. Docker Build & Push:** If all previous stages pass (turn green), Jenkins packages the compiled application into a Docker image, tags it with a new version, and pushes it to a container registry (e.g., Docker Hub).
+
+**7. Update Manifest (The Handoff):** Jenkins clones the GitOps Repo, updates the `deployment.yaml` file with the newly generated Docker image tag, and pushes the commit back to the GitOps Repo.
+
+**8. CD with ArgoCD:** ArgoCD, running inside your K8s cluster, constantly monitors the GitOps Repo. It detects the new commit (the new image tag) and automatically **pulls** the changes.
+
+**9. Deploy to K8s:** Kubernetes performs a Rolling Update with zero downtime to replace the old Pods with the new ones running the latest image.
+
+### Continuous Integration (CI) with Jenkins
+
+Let's use a "Library Management API" as our specific example. Below is the complete declarative Jenkins Pipeline configuration.
+
+**The Pipeline (`Jenkinsfile` located in the App Repo)**
+
+```groovy
+pipeline {
+    agent any
+
+    // Define global environment variables
+    environment {
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
+        DOCKER_IMAGE = 'myrepo/library-api'
+        IMAGE_TAG = "v1.0.${BUILD_NUMBER}"
+        GITOPS_REPO = 'https://github.com/my-org/gitops-manifests.git'
+        GITOPS_CREDS_ID = 'github-gitops-token'
+    }
+
+    stages {
+        stage('1. Secret Scanning (Gitleaks)') {
+            steps {
+                script {
+                    echo "Scanning for hardcoded secrets..."
+                    // Run Gitleaks via a Docker container against the current workspace
+                    sh 'docker run -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source="/path" -v'
+                }
+            }
+        }
+
+        stage('2. Build Application') {
+            steps {
+                script {
+                    echo "Compiling Java Source Code..."
+                    // Standard Maven build command (skipping tests for this specific step)
+                    sh 'mvn clean compile'
+                }
+            }
+        }
+
+        stage('3. Unit Testing') {
+            steps {
+                script {
+                    echo "Running Unit Tests..."
+                    // Execute unit tests. Pipeline fails immediately if any test fails.
+                    sh 'mvn test'
+                }
+            }
+        }
+
+        stage('4. Code Quality (SonarQube)') {
+            steps {
+                script {
+                    echo "Running static code analysis..."
+                    // Requires the SonarQube Scanner plugin configured in Jenkins
+                    withSonarQubeEnv('SonarQube-Server') {
+                        sh 'mvn verify sonar:sonar -DskipTests' // Tests already ran in Stage 3
+                    }
+                }
+            }
+        }
+
+        stage('5. Vulnerability Scanning (Snyk)') {
+            steps {
+                script {
+                    echo "Scanning dependencies for security vulnerabilities..."
+                    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+                        sh 'snyk test --all-projects'
+                    }
+                }
+            }
+        }
+
+        stage('6. Docker Build & Push') {
+            steps {
+                script {
+                    echo "Building Docker Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                    // The Dockerfile should copy the .jar file built in Stage 2
+                    sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ."
+
+                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                        sh "echo \$PASS | docker login -u \$USER --password-stdin"
+                        sh "docker push ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        sh "docker logout"
+                    }
+                }
+            }
+        }
+
+        stage('7. Update GitOps Repository') {
+            steps {
+                script {
+                    echo "Updating Kubernetes Manifests in GitOps Repo..."
+                    withCredentials([gitUsernamePassword(credentialsId: env.GITOPS_CREDS_ID)]) {
+                        // 1. Clone the GitOps repository
+                        sh "git clone ${GITOPS_REPO} gitops-dir"
+
+                        dir('gitops-dir') {
+                            // 2. Use 'sed' to replace the old image tag with the new one in the deployment file
+                            sh "sed -i 's|image: ${DOCKER_IMAGE}:.*|image: ${DOCKER_IMAGE}:${IMAGE_TAG}|g' k8s/library-api/deployment.yaml"
+
+                            // 3. Commit and push the changes back to the GitOps repo
+                            sh "git config user.email 'jenkins@my-org.com'"
+                            sh "git config user.name 'Jenkins CI'"
+                            sh "git add k8s/library-api/deployment.yaml"
+                            sh "git commit -m 'Update image tag to ${IMAGE_TAG} via Jenkins'"
+                            sh "git push origin main"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs() // Clean up the workspace to save disk space
+        }
+        success {
+            echo "CI Pipeline Completed Successfully! Handing over to ArgoCD."
+        }
+        failure {
+            echo "Pipeline Failed! Check logs for compile errors, test failures, or security issues."
+        }
+    }
+}
+```
+
+**Detailed Breakdown of the CI Flow:**
+
+- **Fail-Fast Mechanism:** By placing Gitleaks, Compilation, and Unit Testing at the very beginning, the pipeline will fail immediately if there is a syntax error or a broken test, saving time and computing resources.
+- **The Handoff (Stage 7):** This is the most critical junction. Jenkins does not execute `kubectl apply`. Its only job is to change a single string of text (e.g., `v1.0.4` to `v1.0.5`) in the YAML file and push it to Git.
+
+### Continuous Deployment (CD) with ArgoCD & Kubernetes
+
+At this exact moment, your **GitOps Repo** (`github.com/my-org/gitops-manifests.git`) has the following directory structure:
+
+```text
+gitops-manifests/
+└── k8s/
+    └── library-api/
+        ├── deployment.yaml # Jenkins just updated this file
+        └── service.yaml
+```
+
+**Step 1: The Kubernetes Manifest (Inside the GitOps Repo `k8s/library-api/deployment.yaml`)**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: library-api-deployment
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: library-api
+  template:
+    metadata:
+      labels:
+        app: library-api
+    spec:
+      containers:
+        - name: library-spring-boot
+          image: myrepo/library-api:v1.0.5 # Jenkins dynamically updated this line
+          ports:
+            - containerPort: 8080
+```
+
+**Step 2: The ArgoCD Application CRD (`argocd-library-app.yaml`)**
+
+To tell ArgoCD to start monitoring that specific `k8s/library-api` folder in Git, you apply this configuration directly into your Kubernetes cluster.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: library-api-cd
+  namespace: argocd
+spec:
+  project: default
+
+  # [1. The Source] Which Git repository and folder should it watch?
+  source:
+    repoURL: "https://github.com/my-org/gitops-manifests.git"
+    targetRevision: main
+    path: k8s/library-api
+
+  # [2. The Destination] Which cluster and namespace should it deploy to?
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: production
+
+  # [3. The Automation Policy]
+  syncPolicy:
+    automated:
+      prune: true # Delete K8s resources if they are removed from the Git repository
+      selfHeal: true # Automatically revert any manual changes made via kubectl
+```
+
+**How ArgoCD Executes the Deployment:**
+
+1. ArgoCD detects the new commit from Jenkins.
+2. It compares the Git state (`image: v1.0.5`) with the live cluster state (`image: v1.0.4`) and marks the application as `"OutOfSync"`.
+3. Because `automated` is enabled, ArgoCD immediately applies the changes to the Kube-API Server.
+4. Kubernetes triggers a **Rolling Update**, spinning up new Pods with `v1.0.5` and gracefully terminating the old ones.
