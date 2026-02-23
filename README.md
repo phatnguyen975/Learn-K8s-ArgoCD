@@ -149,7 +149,7 @@ You have multiple options:
 
 - **Local single-node:** [Minikube](https://minikube.sigs.k8s.io/docs/)
 - **CLI-only lightweight:** [K3s](https://docs.k3s.io/)
-- **Production:** kubeadm
+- **Production:** [Kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/)
 - **Cloud:** EKS / GKE / AKS
 
 To follow this tutorial, we will use **Minikube** (a local single-node cluster) and **kubectl** (the CLI tool).
@@ -197,7 +197,7 @@ kubectl get nodes
 ```
 
 - **Useful Commands:**
-  - `minikube status`: Checks the health of the Minikube components (host, kubelet, apiserver).
+  - `minikube status`: Checks the health of the Minikube components (`host`, `kubelet`, `apiserver`).
   - `minikube ip`: Returns the IP address of the local cluster (useful for testing networking later).
   - `minikube dashboard`: Kubernetes comes with a built-in web UI. This command enables the dashboard add-on and opens it in your default web browser, giving you a visual representation of your cluster.
   - `minikube stop`: Safely shuts down the local cluster without deleting your deployed resources.
