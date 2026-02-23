@@ -466,9 +466,11 @@ A Pod is the smallest, most basic, and deployable compute unit you can create an
 
 You can think of a Pod as a tiny, isolated "logical host" (similar to a lightweight Virtual Machine or a WSL2 instance). When multiple containers are placed inside the same Pod, they behave as if they are running on the same physical machine.
 
+**Note:** Each Pod has its own IP address.
+
 This means containers within the same Pod share:
 
-- **Network Namespace:** All containers in a Pod share the same IP address and port space. If you have a Java Spring Boot application container running on port 8080 and a logging container in the same Pod, they can communicate with each other using `localhost:8080`.
+- **Network Namespace:** All containers in a Pod share the same IP address and port space. If you have a Java Spring Boot application container running on port `8080` and a logging container in the same Pod, they can communicate with each other using `localhost:8080`.
 - **Storage (Volumes):** Containers in the same Pod can mount the same shared storage volumes, allowing them to read and write to the exact same files simultaneously.
 - **IPC (Inter-Process Communication):** They can communicate using standard Linux IPC mechanisms (like shared memory).
 
