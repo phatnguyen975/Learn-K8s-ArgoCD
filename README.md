@@ -1279,7 +1279,7 @@ Helm solves this by introducing **Templating**. Instead of hardcoding values int
 Helm relies on three big concepts:
 
 1. **Chart:** A Helm package. It is a bundle of information necessary to create an instance of a Kubernetes application. Think of it as a template or a blueprint.
-2. **Repository (Repo):** A location where packaged charts can be stored and shared (similar to Docker Hub for images or Maven Central for Java dependencies). Artifact Hub is the most popular public repository.
+2. **Repository (Repo):** A location where packaged charts can be stored and shared (similar to Docker Hub for images or Maven Central for Java dependencies). [Artifact Hub](https://artifacthub.io/) is the most popular public repository.
 3. **Release:** A running instance of a chart in a Kubernetes cluster. You can install the exact same chart multiple times in the same cluster, and each time it will create a new, uniquely named Release.
 
 ### The Anatomy of a Helm Chart
