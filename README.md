@@ -170,7 +170,7 @@ curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stabl
 
 # 2. Validate the binary (optional but recommended)
 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
-echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+echo "$(cat kubectl.sha256) kubectl" | sha256sum --check
 
 # 3. Install kubectl
 sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
@@ -1396,7 +1396,7 @@ spec:
       name: mysql
   selector:
     app: mysql
-
+---
 # --- Part 2: The StatefulSet ---
 apiVersion: apps/v1
 kind: StatefulSet
