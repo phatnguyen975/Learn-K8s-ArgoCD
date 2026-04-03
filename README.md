@@ -1303,6 +1303,144 @@ my-app/
 - Example in `templates/deployment.yaml`: `replicas: {{ .Values.replicaCount }}`
 - When Helm runs, it injects the `3` into the final YAML sent to Kubernetes.
 
+### Helm Template Syntax Cheat Sheet
+
+Helm uses **Go Templates** for its templating engine. Below are the essential syntaxes you need to know when writing or reading a Helm Chart:
+
+**1. Calling Variables (`.Values`)**
+
+This is the most common syntax. Anything defined in your `values.yaml` can be injected using `{{ .Values.<key> }}`.
+
+- In `values.yaml`:
+
+```yaml
+image:
+  repository: myrepo/library-api
+  tag: v1.0.5
+replicaCount: 3
+```
+
+- In `templates/deployment.yaml`:
+
+```yaml
+spec:
+  replicas: { { .Values.replicaCount } }
+  containers:
+    - name: app
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+```
+
+**2. Built-in Objects**
+
+Helm provides several system objects that are always available, even without being defined in `values.yaml`:
+
+- `{{ .Release.Name }}`: The name given to the release when running helm install. (Great for dynamically naming resources to prevent conflicts).
+- `{{ .Release.Namespace }}`: The namespace the release is being deployed into.
+- `{{ .Chart.Name }}`: The name of the chart itself.
+
+```yaml
+metadata:
+  name: {{ .Release.Name }}-deployment
+  namespace: {{ .Release.Namespace }}
+```
+
+**3. Functions & Pipelines (`|`)**
+
+Helm supports over 60 functions to transform data. You can chain these functions together using the pipeline character `|`.
+
+- `quote`: Ensures the output is always wrapped in quotation marks (safe for strings). \
+  `name: {{ .Values.appName | quote }}` -> Result: `name: "library-api"`
+- `default`: Provides a fallback value if the user forgets to define it in `values.yaml`. \
+  `replicas: {{ .Values.replicaCount | default 1 }}`
+- **String manipulations (upper, lower):** \
+  `env: {{ .Values.environment | upper }}` -> Result: `env: PRODUCTION`
+
+**4. Conditionals (`if` / `else`)**
+
+Allows you to toggle entire blocks of YAML on or off based on user configuration.
+
+- In `values.yaml`:
+
+```yaml
+ingress:
+  enabled: true
+```
+
+- In `templates/ingress.yaml`:
+
+```yaml
+{{ if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+# ... (ingress spec) ...
+{{ else }}
+# No Ingress will be generated if enabled is false
+{{ end }}
+```
+
+**5. Whitespace Control (`{{-`)**
+
+Because YAML is strictly reliant on indentation, empty lines left behind by `{{ if }}` statements can break your manifest. Adding a dash `-` inside the curly braces tells Helm to swallow the whitespace next to it.
+
+- `{{- `: removes whitespace to the left.
+- ` -}}`: removes whitespace to the right.
+- **Proper Usage:**
+
+```yaml
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+{{- end }}
+```
+
+**6. Loops (range)**
+
+Used to iterate over a list or map in values.yaml to dynamically generate multiple lines of YAML.
+
+- In `values.yaml`:
+
+```yaml
+extraEnvs:
+  - name: LOG_LEVEL
+    value: "DEBUG"
+  - name: API_TIMEOUT
+    value: "30s"
+```
+
+- In `templates/deployment.yaml`:
+
+```yaml
+env:
+  {{- range .Values.extraEnvs }}
+  - name: {{ .name }}
+    value: {{ .value | quote }}
+  {{- end }}
+```
+
+**7. Named Templates & Includes (`define` and `include`)**
+
+This is the advanced feature you noticed! It is used to adhere to the **DRY (Don't Repeat Yourself)** principle. Often, you need to apply the exact same block of code (like a block of labels) to your `deployment.yaml`, `service.yaml`, and `ingress.yaml`. Instead of copy-pasting it, you `define` it once, and `include` it everywhere.
+
+- **Step 1: Define it (Usually stored in a special file named `_helpers.tpl`):**
+
+```yaml
+{{- define "library-api.labels" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: Helm
+{{- end -}}
+```
+
+- **Step 2: Include it (Inside your `deployment.yaml`):**
+
+```yaml
+metadata:
+  name: {{ .Release.Name }}-deploy
+  labels:
+    {{- include "library-api.labels" . | nindent 4 }}
+```
+
 ### Essential Helm Commands
 
 |                       Command                        |                                                 Explanation & Use Case                                                 |                              Example                              |
@@ -1846,19 +1984,20 @@ pipeline {
         stage('7. Update GitOps Repository') {
             steps {
                 script {
-                    echo "Updating Kubernetes Manifests in GitOps Repo..."
+                    echo "Updating Helm values in GitOps Repo..."
                     withCredentials([gitUsernamePassword(credentialsId: env.GITOPS_CREDS_ID)]) {
                         // 1. Clone the GitOps repository
                         sh "git clone ${GITOPS_REPO} gitops-dir"
 
                         dir('gitops-dir') {
-                            // 2. Use 'sed' to replace the old image tag with the new one in the deployment file
-                            sh "sed -i 's|image: ${DOCKER_IMAGE}:.*|image: ${DOCKER_IMAGE}:${IMAGE_TAG}|g' k8s/library-api/deployment.yaml"
+                            // 2. Update the values.yaml of the Helm Chart
+                            // Use 'sed' to find the 'tag:' line and replace it with the new IMAGE_TAG
+                            sh "sed -i 's|tag: .*|tag: \"${IMAGE_TAG}\"|g' library-api-chart/values.yaml"
 
                             // 3. Commit and push the changes back to the GitOps repo
                             sh "git config user.email 'jenkins@my-org.com'"
                             sh "git config user.name 'Jenkins CI'"
-                            sh "git add k8s/library-api/deployment.yaml"
+                            sh "git add library-api-chart/values.yaml"
                             sh "git commit -m 'Update image tag to ${IMAGE_TAG} via Jenkins'"
                             sh "git push origin main"
                         }
